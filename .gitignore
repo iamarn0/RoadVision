@@ -1,0 +1,60 @@
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# AI models (do not commit weights)
+models/*.pt
+models/*.onnx
+models/*.engine
+models/*.bin
+models/*.pth
+!models/README.md
+
+# Runtime storage
+storage/uploads/**
+storage/processed/**
+storage/evidence/**
+storage/exports/**
+!storage/**/.gitkeep
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Docker / local data
+postgres-data/
+redis-data/
+
+# Logs
+*.log
+logs/
