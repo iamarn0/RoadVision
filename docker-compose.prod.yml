@@ -44,6 +44,7 @@ services:
       STORAGE_ROOT: /app/storage
       VEHICLE_MODEL_PATH: /models/vehicle_detector.pt
       PLATE_MODEL_PATH: /models/plate_detector.pt
+      GIT_COMMIT: ${GIT_COMMIT:-unknown}
     volumes:
       - ./storage:/app/storage
       - ./models:/models:ro
@@ -75,6 +76,7 @@ services:
       STORAGE_ROOT: /app/storage
       VEHICLE_MODEL_PATH: /models/vehicle_detector.pt
       PLATE_MODEL_PATH: /models/plate_detector.pt
+      GIT_COMMIT: ${GIT_COMMIT:-unknown}
       PROCESSING_DEVICE: cpu
       OCR_DEVICE: cpu
       USE_HALF_PRECISION: "false"

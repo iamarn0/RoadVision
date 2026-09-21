@@ -1,8 +1,24 @@
+from pathlib import Path
+from typing import Any
+
 import numpy as np
 
 NIGHT_LUMINANCE_MAX = 95.0
 ROI_ENHANCE_LUMINANCE_MAX = 110.0
 HIGH_EVIDENCE_SCORE = 0.62
+JPEG_EVIDENCE_QUALITY = 98
+JPEG_PLATE_QUALITY = 100
+PLATE_CROP_PAD_DAY = 0.22
+PLATE_CROP_PAD_NIGHT = 0.28
+VEHICLE_CROP_PAD = 0.16
+
+
+def save_jpeg(path: Path | str, image: np.ndarray, quality: int = JPEG_EVIDENCE_QUALITY) -> None:
+    import cv2
+
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(dest), image, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
 
 
 def preprocess_plate(image: np.ndarray, variant: str = "default") -> np.ndarray:
@@ -106,7 +122,7 @@ def evidence_score(
 ) -> float:
     return (
         0.26 * float(plate_confidence)
-        + 0.20 * min(1.0, box_area / 2500.0)
+        + 0.20 * min(1.0, box_area / 12000.0)
         + 0.20 * min(1.0, sharp / 140.0)
         + 0.14 * min(1.0, contrast / 40.0)
         + 0.12 * min(1.0, edge_density / 0.12)
@@ -189,6 +205,31 @@ def is_plausible_plate_crop(
         return False, sharp, 0.0
     _s, contrast, _m, _e, _c = plate_structure_metrics(image)
     return True, sharp, contrast
+
+
+def is_better_evidence(
+    previous: dict[str, Any] | None,
+    score: float,
+    plate_area: float,
+    sharp: float,
+) -> bool:
+    """Replace only when the new crop is larger and still readable, or clearly sharper.
+
+    A larger motion-blurred plate must not beat a slightly smaller sharp one.
+    """
+    if previous is None:
+        return True
+    prev_score = float(previous.get("score") or 0.0)
+    prev_area = float(previous.get("plate_area") or 0.0)
+    prev_sharp = float(previous.get("sharp") or 0.0)
+    readable = sharp >= prev_sharp * 0.90
+    if plate_area > prev_area * 1.05 and readable:
+        return True
+    if sharp > prev_sharp * 1.25 and plate_area >= prev_area * 0.85:
+        return True
+    if score > prev_score * 1.02 and readable:
+        return True
+    return False
 
 
 def crop_box(image: np.ndarray, x1: int, y1: int, x2: int, y2: int, pad: float = 0.08) -> np.ndarray:

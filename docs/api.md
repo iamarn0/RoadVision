@@ -38,6 +38,7 @@ Do not return stack traces to clients.
 | Method | Path | Purpose | Auth |
 | --- | --- | --- | --- |
 | GET | `/health/live` | Process is up | public |
+| GET | `/api/version` | Product version, short commit, environment | public |
 | GET | `/health/ready` | Database, Redis, storage reachable | authenticated |
 | GET | `/metrics` | Operational counters | authenticated |
 

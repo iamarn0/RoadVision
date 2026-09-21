@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core.errors import AppError, ErrorCodes
-from app.database import get_db
+from app.database.session import get_session_factory
 from app.security.sessions import get_user_for_token
 from packages.db.enums import UserRole
 from packages.db.models import User
@@ -33,15 +33,16 @@ def _demo_operator() -> User:
     )
 
 
-def get_optional_user(
-    request: Request,
-    db: Session = Depends(get_db),
-) -> Optional[User]:
+def get_optional_user(request: Request) -> Optional[User]:
     settings = get_settings()
     if settings.auth_disabled:
         return _demo_operator()
     token = request.cookies.get(_cookie_name())
-    return get_user_for_token(db, token)
+    db = get_session_factory()()
+    try:
+        return get_user_for_token(db, token)
+    finally:
+        db.close()
 
 
 def get_current_user(user: Optional[User] = Depends(get_optional_user)) -> User:

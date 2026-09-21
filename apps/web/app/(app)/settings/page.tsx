@@ -7,6 +7,13 @@ import { useAuth } from "@/components/auth-provider";
 import { roleLabel } from "@/lib/auth";
 import { Button, Card, Skeleton, TextField } from "@/components/ui";
 
+type AppVersion = {
+  name: string;
+  version: string;
+  commit: string;
+  environment: string;
+};
+
 type SettingsPublic = {
   app_version: string;
   processing_profile: string;
@@ -38,6 +45,10 @@ export default function SettingsPage() {
     queryKey: ["settings"],
     queryFn: () => apiGet<SettingsPublic>("/api/settings"),
   });
+  const appVersion = useQuery({
+    queryKey: ["app-version"],
+    queryFn: () => apiGet<AppVersion>("/api/version"),
+  });
 
   async function onChangePassword(event: FormEvent) {
     event.preventDefault();
@@ -68,10 +79,19 @@ export default function SettingsPage() {
     <section className="space-y-4">
       <div>
         <h1 className="text-xl font-medium">Settings</h1>
-        <p className="mt-1 text-sm text-[#9aa8b5]">
+        <p className="mt-1 text-sm text-[var(--muted)]">
           Runtime configuration for RoadVision v{s.app_version}. Secrets are never displayed.
         </p>
       </div>
+
+      <Card>
+        <h2 className="text-sm font-medium">System information</h2>
+        <ul className="mt-3 space-y-1 text-sm">
+          <li>Version: {appVersion.data?.version ?? s.app_version}</li>
+          <li>Commit: {appVersion.data?.commit ?? "unknown"}</li>
+          <li>Environment: {appVersion.data?.environment ?? "—"}</li>
+        </ul>
+      </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
@@ -117,7 +137,7 @@ export default function SettingsPage() {
             </li>
           </ul>
           <form className="mt-4 space-y-3" onSubmit={onChangePassword}>
-            <p className="text-xs uppercase tracking-wide text-[#9aa8b5]">Change password</p>
+            <p className="text-xs uppercase tracking-wide text-[var(--muted)]">Change password</p>
             <TextField
               label="Current password"
               type="password"
@@ -137,7 +157,7 @@ export default function SettingsPage() {
             {pwError ? <p className="text-sm text-[#c45c5c]">{pwError}</p> : null}
             <Button type="submit">Update password</Button>
           </form>
-          <div className="mt-6 border-t border-[#2a3441] pt-4">
+          <div className="mt-6 border-t border-[var(--border)] pt-4">
             <Button type="button" variant="danger" onClick={() => void logout()}>
               Sign out
             </Button>

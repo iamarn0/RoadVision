@@ -1,7 +1,10 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from packages.app_meta import read_app_version, read_git_commit
 
 
 def _find_repo_root() -> Path:
@@ -31,7 +34,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    app_version: str = "0.1.0"
+    git_commit: str = Field(default_factory=read_git_commit)
     log_level: str = "INFO"
     database_url: str = "sqlite:///./storage/roadvision.db"
     redis_url: str = "redis://localhost:6379/0"
@@ -69,6 +72,11 @@ class Settings(BaseSettings):
     medium_confidence_threshold: float = 0.65
     low_confidence_threshold: float = 0.40
     display_plate_threshold: float = 0.65
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def app_version(self) -> str:
+        return read_app_version()
 
     @property
     def storage_root_path(self) -> Path:

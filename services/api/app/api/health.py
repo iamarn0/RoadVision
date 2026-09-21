@@ -11,6 +11,17 @@ from app.security.deps import RequireReader
 router = APIRouter(tags=["health"])
 
 
+@router.get("/api/version", summary="Application version metadata")
+def version() -> dict[str, str]:
+    settings = get_settings()
+    return {
+        "name": settings.app_name,
+        "version": settings.app_version,
+        "commit": settings.git_commit,
+        "environment": settings.app_env,
+    }
+
+
 @router.get("/health/live", summary="Liveness probe")
 def live() -> dict[str, str]:
     settings = get_settings()

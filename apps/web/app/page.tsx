@@ -1,6 +1,4 @@
-import { redirect } from "next/navigation";
-
-/** Site entry is always Sign in — never password-change or the ops console. */
+/** Marketing homepage is served from public/home/index.html via middleware rewrite. */
 export default function HomePage() {
-  redirect("/login");
+  return null;
 }

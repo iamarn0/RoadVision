@@ -20,5 +20,6 @@ jobs:
             git fetch origin
             git reset --hard origin/main
             cp /root/roadvision.env.bak .env
+            export GIT_COMMIT=$(git rev-parse --short HEAD)
             docker compose -f docker-compose.prod.yml up -d --build
             docker compose -f docker-compose.prod.yml exec -T api alembic upgrade head || true

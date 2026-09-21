@@ -6,17 +6,18 @@ import numpy as np
 
 from app.pipeline.geometry import BoundingBox, Detection
 from app.preprocessing.plates import (
-    HIGH_EVIDENCE_SCORE,
     ROI_ENHANCE_LUMINANCE_MAX,
+    VEHICLE_CROP_PAD,
     crop_box_asymmetric,
     enhance_low_light_frame,
     frame_luminance,
 )
 from app.tracking.tracker import TrackedVehicle
 
-ROI_IMAGE_SIZE = 320
+ROI_IMAGE_SIZE = 640
 MIN_PLATE_SEARCH_AREA = 2500.0
 MIN_PLATE_SEARCH_WIDTH = 36.0
+GROWTH_SEARCH_RATIO = 1.05
 
 
 def remap_plate_box(local: BoundingBox, origin_x: float, origin_y: float) -> BoundingBox:
@@ -33,6 +34,13 @@ def vehicle_roi_pads(class_name: str) -> tuple[float, float, float, float]:
     if class_name == "motorcycle":
         return 0.28, 0.12, 0.28, 0.42
     return 0.22, 0.12, 0.22, 0.32
+
+
+def vehicle_capture_pads(class_name: str) -> tuple[float, float, float, float]:
+    """Saved vehicle crop: context around the body plus extra bumper/plate at the bottom."""
+    if class_name == "motorcycle":
+        return VEHICLE_CROP_PAD, 0.10, VEHICLE_CROP_PAD, 0.38
+    return VEHICLE_CROP_PAD, 0.10, VEHICLE_CROP_PAD, 0.28
 
 
 def crop_vehicle_roi(
@@ -57,18 +65,17 @@ def prepare_roi_for_detect(roi: np.ndarray) -> np.ndarray:
 def skip_ids_with_strong_evidence(
     vehicles: list[TrackedVehicle],
     best_by_track: dict[int, dict[str, Any]],
-    previous_areas: dict[int, float],
-    high_score: float = HIGH_EVIDENCE_SCORE,
+    last_search_areas: dict[int, float],
 ) -> set[int]:
+    """Skip plate YOLO unless this is first sight or the vehicle got ~5% closer."""
     skip: set[int] = set()
     for vehicle in vehicles:
         best = best_by_track.get(vehicle.track_id)
-        if not best or float(best.get("score") or 0.0) < high_score:
+        if not best:
             continue
         area = vehicle.detection.bounding_box.area
-        prev = previous_areas.get(vehicle.track_id, 0.0)
-        grew = prev > 0 and area > prev * 1.18
-        if not grew:
+        prev = float(last_search_areas.get(vehicle.track_id) or 0.0)
+        if prev > 0 and area < prev * GROWTH_SEARCH_RATIO:
             skip.add(vehicle.track_id)
     return skip
 

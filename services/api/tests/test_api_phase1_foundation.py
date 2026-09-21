@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from packages.app_meta import read_app_version
 
 REQUIRED_ENV_KEYS = [
     "APP_VERSION",
@@ -34,4 +35,5 @@ def test_env_example_contains_required_keys() -> None:
 def test_application_version_is_010() -> None:
     from app import APP_VERSION
 
-    assert APP_VERSION == "0.1.0"
+    assert APP_VERSION == read_app_version()
+    assert read_app_version() != "unknown"

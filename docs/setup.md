@@ -122,7 +122,7 @@ cd apps\web
 npm run dev
 ```
 
-Open `http://localhost:3000` and sign in at `/login`.
+Open `http://localhost:3000` for the public landing page. Sign in at `/login` to reach the ANPR console.
 
 Configure bootstrap admin in `.env`:
 

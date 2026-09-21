@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from packages.app_meta import read_app_version
+
 
 def test_job_progress_schema_exists() -> None:
     root = Path(__file__).resolve().parents[3]
@@ -13,4 +15,5 @@ def test_job_progress_schema_exists() -> None:
 def test_worker_version() -> None:
     from app import APP_VERSION
 
-    assert APP_VERSION == "0.1.0"
+    assert APP_VERSION == read_app_version()
+    assert read_app_version() != "unknown"

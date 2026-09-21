@@ -28,9 +28,9 @@ export default function VideosPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-medium">Videos</h1>
-          <p className="mt-1 text-sm text-[#9aa8b5]">Uploaded roadside and CCTV footage awaiting or completing ANPR.</p>
+          <p className="mt-1 text-sm text-[var(--muted)]">Uploaded roadside and CCTV footage awaiting or completing ANPR.</p>
         </div>
-        <Link href="/videos/upload" className="rounded-sm bg-[#2f9e9e] px-3 py-2 text-sm text-[#0f1419]">
+        <Link href="/videos/upload" className="rounded-sm bg-[var(--accent)] px-3 py-2 text-sm text-white">
           Upload footage
         </Link>
       </div>
@@ -45,7 +45,7 @@ export default function VideosPage() {
       {videos.data && videos.data.length > 0 && (
         <Card className="overflow-x-auto p-0">
           <table className="min-w-full text-left text-sm">
-            <thead className="border-b border-[#2a3441] text-xs uppercase tracking-wide text-[#9aa8b5]">
+            <thead className="border-b border-[var(--border)] text-xs uppercase tracking-wide text-[var(--muted)]">
               <tr>
                 <th className="px-4 py-3">Filename</th>
                 <th className="px-4 py-3">Size</th>
@@ -57,7 +57,7 @@ export default function VideosPage() {
             </thead>
             <tbody>
               {videos.data.map((video) => (
-                <tr key={video.id} className="border-b border-[#2a3441]">
+                <tr key={video.id} className="border-b border-[var(--border)]">
                   <td className="px-4 py-3">{video.original_filename}</td>
                   <td className="px-4 py-3">{formatBytes(video.file_size)}</td>
                   <td className="px-4 py-3">

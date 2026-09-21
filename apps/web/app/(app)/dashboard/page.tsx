@@ -56,11 +56,11 @@ export default function DashboardPage() {
       <div className="flex items-end justify-between gap-4">
         <div>
           <h1 className="text-xl font-medium">Overview</h1>
-          <p className="mt-1 text-sm text-[#9aa8b5]">
+          <p className="mt-1 text-sm text-[var(--muted)]">
             Live ANPR operations summary from processed CCTV and roadside footage.
           </p>
         </div>
-        <Link href="/videos/upload" className="rounded-sm bg-[#2f9e9e] px-3 py-2 text-sm text-[#0f1419]">
+        <Link href="/videos/upload" className="rounded-sm bg-[var(--accent)] px-3 py-2 text-sm text-white">
           Upload footage
         </Link>
       </div>
@@ -79,7 +79,7 @@ export default function DashboardPage() {
             ["Unique Plates", data.unique_plates],
           ].map(([label, value]) => (
             <Card key={String(label)}>
-              <p className="text-xs uppercase tracking-wide text-[#9aa8b5]">{label}</p>
+              <p className="text-xs uppercase tracking-wide text-[var(--muted)]">{label}</p>
               <p className="mt-2 text-2xl font-medium">{value}</p>
             </Card>
           ))}
@@ -90,12 +90,12 @@ export default function DashboardPage() {
         <Card>
           <h2 className="text-sm font-medium">Active Processing Jobs</h2>
           {data.active_jobs.length === 0 ? (
-            <p className="mt-3 text-sm text-[#9aa8b5]">No active jobs.</p>
+            <p className="mt-3 text-sm text-[var(--muted)]">No active jobs.</p>
           ) : (
             <ul className="mt-3 space-y-2">
               {data.active_jobs.map((job) => (
                 <li key={job.id} className="flex items-center justify-between text-sm">
-                  <Link href={`/jobs/${job.id}`} className="text-[#2f9e9e] hover:underline">
+                  <Link href={`/jobs/${job.id}`} className="text-[var(--accent)] hover:underline">
                     {job.source_filename ?? job.id.slice(0, 8)}
                   </Link>
                   <span className={statusTone(job.status)}>
@@ -110,13 +110,13 @@ export default function DashboardPage() {
         <Card>
           <h2 className="text-sm font-medium">Recent Videos</h2>
           {data.recent_videos.length === 0 ? (
-            <p className="mt-3 text-sm text-[#9aa8b5]">No footage uploaded yet.</p>
+            <p className="mt-3 text-sm text-[var(--muted)]">No footage uploaded yet.</p>
           ) : (
             <ul className="mt-3 space-y-2 text-sm">
               {data.recent_videos.map((video) => (
                 <li key={video.id} className="flex justify-between gap-3">
                   <span className="truncate">{video.original_filename}</span>
-                  <span className="text-[#9aa8b5]">
+                  <span className="text-[var(--muted)]">
                     {video.width && video.height ? `${video.width}×${video.height}` : "—"}
                   </span>
                 </li>

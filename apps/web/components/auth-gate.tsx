@@ -17,7 +17,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#0b0f14] text-sm text-[#9aa8b5]">
+      <div className="flex min-h-screen items-center justify-center bg-[var(--bg)] text-sm text-[var(--muted)]">
         Checking session…
       </div>
     );

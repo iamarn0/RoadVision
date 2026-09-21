@@ -225,7 +225,7 @@ def test_plate_index_item_includes_overlay_and_confidence() -> None:
     assert item["plate_confidence"] == 0.81
 
 
-def test_skip_strong_evidence_unless_vehicle_grew() -> None:
+def test_skip_plate_search_until_vehicle_grows() -> None:
     from app.pipeline.geometry import BoundingBox, Detection
     from app.pipeline.plate_search import skip_ids_with_strong_evidence
     from app.tracking.tracker import TrackedVehicle
@@ -235,10 +235,10 @@ def test_skip_strong_evidence_unless_vehicle_grew() -> None:
         detection=Detection(BoundingBox(0, 0, 40, 40), "car", 0.9, 1, 0.0),
     )
     best = {7: {"score": 0.8}}
-    skip = skip_ids_with_strong_evidence([vehicle], best, {7: 1600.0})
-    assert 7 in skip
-    grew = skip_ids_with_strong_evidence([vehicle], best, {7: 200.0})
-    assert 7 not in grew
+    assert 7 in skip_ids_with_strong_evidence([vehicle], best, {7: 1600.0})
+    assert 7 not in skip_ids_with_strong_evidence([vehicle], best, {7: 1400.0})
+    assert 7 not in skip_ids_with_strong_evidence([vehicle], {}, {7: 1600.0})
+    assert 7 in skip_ids_with_strong_evidence([vehicle], best, {7: 2000.0})
 
 
 def _plate_bars() -> "object":
@@ -294,3 +294,90 @@ def test_later_pass_same_plate_is_new_row() -> None:
         exclude_track_id=200,
     )
     assert merged is None
+
+
+def test_is_better_evidence_requires_sharpness() -> None:
+    from app.preprocessing.plates import is_better_evidence
+
+    previous = {"score": 0.55, "plate_area": 1000.0, "sharp": 40.0}
+    assert is_better_evidence(None, 0.4, 100.0, 10.0) is True
+    assert is_better_evidence(previous, 0.50, 1100.0, 38.0) is True
+    assert is_better_evidence(previous, 0.50, 1500.0, 20.0) is False
+    assert is_better_evidence(previous, 0.54, 900.0, 55.0) is True
+    assert is_better_evidence(previous, 0.70, 800.0, 20.0) is False
+
+
+def test_vehicle_capture_pads_keep_bumper_context() -> None:
+    from app.pipeline.plate_search import ROI_IMAGE_SIZE, vehicle_capture_pads
+    from app.preprocessing.plates import VEHICLE_CROP_PAD
+
+    car = vehicle_capture_pads("car")
+    moto = vehicle_capture_pads("motorcycle")
+    assert car[0] == VEHICLE_CROP_PAD
+    assert car[3] > car[1]
+    assert moto[3] > car[3]
+    assert ROI_IMAGE_SIZE == 640
+
+
+def test_save_jpeg_writes_quality_param(tmp_path) -> None:
+    import numpy as np
+    from app.preprocessing.plates import JPEG_PLATE_QUALITY, save_jpeg
+
+    img = np.zeros((24, 80, 3), dtype=np.uint8)
+    img[:] = (30, 40, 50)
+    dest = tmp_path / "plate.jpg"
+    save_jpeg(dest, img, JPEG_PLATE_QUALITY)
+    assert dest.is_file()
+    assert dest.stat().st_size > 0
+
+
+def test_capture_publishes_when_leaving_or_lost() -> None:
+    from app.pipeline.runner import capture_is_due_to_publish
+
+    pending = {"published": False, "shrink_streak": 0}
+    assert capture_is_due_to_publish(pending, visible=True) is False
+    pending["shrink_streak"] = 2
+    assert capture_is_due_to_publish(pending, visible=True) is True
+    assert capture_is_due_to_publish({"published": False, "shrink_streak": 0}, visible=False) is True
+    assert capture_is_due_to_publish({"published": True, "shrink_streak": 5}, visible=False) is False
+
+
+def test_publish_track_capture_writes_once(tmp_path) -> None:
+    import numpy as np
+    from app.pipeline.runner import _publish_track_capture
+
+    img = np.zeros((20, 40, 3), dtype=np.uint8)
+    capture = {
+        "image_plate": img,
+        "image_vehicle": img,
+        "image_full": img,
+        "first_seen": 1.0,
+        "last_seen": 2.0,
+        "vehicle_type": "car",
+        "plate_confidence": 0.8,
+        "vehicle_confidence": 0.9,
+    }
+    assert _publish_track_capture(tmp_path, 3, capture, None) is True
+    assert (tmp_path / "track_3.jpg").is_file()
+    assert (tmp_path / "vehicle_3.jpg").is_file()
+    assert (tmp_path / "full_3.jpg").is_file()
+    assert capture["published"] is True
+    assert _publish_track_capture(tmp_path, 3, capture, None) is False
+
+
+def test_publish_startup_frame_writes_live_and_raw(tmp_path) -> None:
+    import cv2
+    import numpy as np
+    from app.pipeline.runner import _publish_startup_frame
+
+    video = tmp_path / "clip.mp4"
+    writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"mp4v"), 5.0, (64, 48))
+    frame = np.full((48, 64, 3), 90, dtype=np.uint8)
+    writer.write(frame)
+    writer.release()
+    live = tmp_path / "live.jpg"
+    raw = tmp_path / "live_raw.jpg"
+    assert _publish_startup_frame(video, live, raw) is True
+    assert live.is_file()
+    assert raw.is_file()
+    assert raw.stat().st_size >= live.stat().st_size

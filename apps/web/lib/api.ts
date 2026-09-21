@@ -38,7 +38,8 @@ async function parseError(response: Response): Promise<never> {
   if (
     typeof window !== "undefined" &&
     response.status === 401 &&
-    !window.location.pathname.startsWith("/login")
+    !window.location.pathname.startsWith("/login") &&
+    window.location.pathname !== "/"
   ) {
     window.location.href = "/login";
   }

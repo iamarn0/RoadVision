@@ -187,7 +187,7 @@ export default function PersonnelPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-medium">Personnel</h1>
-          <p className="mt-1 text-sm text-[#9aa8b5]">
+          <p className="mt-1 text-sm text-[var(--muted)]">
             Issue and manage console access for authorized operators and auditors.
           </p>
         </div>
@@ -223,7 +223,7 @@ export default function PersonnelPage() {
             <option value="active">Active</option>
             <option value="disabled">Disabled</option>
           </SelectField>
-          <div className="flex items-end text-sm text-[#9aa8b5]">
+          <div className="flex items-end text-sm text-[var(--muted)]">
             {filtered.length} account{filtered.length === 1 ? "" : "s"}
           </div>
         </div>
@@ -244,7 +244,7 @@ export default function PersonnelPage() {
       {filtered.length > 0 ? (
         <Card className="overflow-x-auto p-0">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-[#2a3441] text-[#9aa8b5]">
+            <thead className="border-b border-[var(--border)] text-[var(--muted)]">
               <tr>
                 <th className="px-4 py-3 font-medium">Name</th>
                 <th className="px-4 py-3 font-medium">Email</th>
@@ -256,8 +256,8 @@ export default function PersonnelPage() {
             </thead>
             <tbody>
               {filtered.map((u) => (
-                <tr key={u.id} className="border-t border-[#2a3441]">
-                  <td className="px-4 py-3 text-[#e8edf2]">{u.display_name}</td>
+                <tr key={u.id} className="border-t border-[var(--border)]">
+                  <td className="px-4 py-3 text-[var(--text)]">{u.display_name}</td>
                   <td className="px-4 py-3">{u.email}</td>
                   <td className="px-4 py-3">
                     <select
@@ -266,7 +266,7 @@ export default function PersonnelPage() {
                       onChange={(e) =>
                         patchMutation.mutate({ id: u.id, body: { role: e.target.value } })
                       }
-                      className="rounded-sm border border-[#2a3441] bg-[#0b0f14] px-2 py-1 text-xs"
+                      className="rounded-sm border border-[var(--border)] bg-[var(--panel)] px-2 py-1 text-xs"
                       aria-label={`Role for ${u.display_name}`}
                     >
                       <option value="admin">Administrator</option>
@@ -285,11 +285,11 @@ export default function PersonnelPage() {
                       {u.is_active ? "Active" : "Disabled"}
                     </Badge>
                   </td>
-                  <td className="px-4 py-3 text-[#9aa8b5]">{formatLastLogin(u.last_login_at)}</td>
+                  <td className="px-4 py-3 text-[var(--muted)]">{formatLastLogin(u.last_login_at)}</td>
                   <td className="space-x-2 px-4 py-3 whitespace-nowrap">
                     <button
                       type="button"
-                      className="text-xs text-[#9aa8b5] hover:text-white disabled:opacity-40"
+                      className="text-xs text-[var(--muted)] hover:text-[var(--accent)] disabled:opacity-40"
                       disabled={u.id === user.id}
                       onClick={() =>
                         setConfirm({
@@ -302,14 +302,14 @@ export default function PersonnelPage() {
                     </button>
                     <button
                       type="button"
-                      className="text-xs text-[#9aa8b5] hover:text-white"
+                      className="text-xs text-[var(--muted)] hover:text-[var(--accent)]"
                       onClick={() => setConfirm({ type: "reset", user: u })}
                     >
                       Reset password
                     </button>
                     <button
                       type="button"
-                      className="text-xs text-[#9aa8b5] hover:text-white"
+                      className="text-xs text-[var(--muted)] hover:text-[var(--accent)]"
                       onClick={() => setConfirm({ type: "revoke", user: u })}
                     >
                       Revoke sessions
@@ -332,7 +332,7 @@ export default function PersonnelPage() {
           setConfirmPassword("");
         }}
       >
-        <p className="mb-4 text-sm text-[#9aa8b5]">
+        <p className="mb-4 text-sm text-[var(--muted)]">
           Create an account for authorized personnel. Set an initial password to share securely.
         </p>
         <form className="space-y-3" onSubmit={onIssue}>
@@ -400,11 +400,11 @@ export default function PersonnelPage() {
           setCopied(false);
         }}
       >
-        <p className="text-sm text-[#9aa8b5]">
+        <p className="text-sm text-[var(--muted)]">
           Account created for {issuedEmail ?? "the user"}. Confirm the initial password below before
           closing — it will not be shown again.
         </p>
-        <code className="mt-3 block rounded-sm bg-[#0b0f14] px-3 py-3 font-mono text-sm text-[#3d9a6a]">
+        <code className="mt-3 block rounded-sm bg-[var(--hover)] px-3 py-3 font-mono text-sm text-[var(--success)]">
           {tempPassword}
         </code>
         <div className="mt-4 flex justify-end gap-2">

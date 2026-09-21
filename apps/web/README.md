@@ -4,6 +4,7 @@ Next.js UI for RoadVision.
 
 Routes:
 
+- `/` Public RoadVision landing page
 - `/login` Sign in
 - `/dashboard` Overview
 - `/videos` Video library

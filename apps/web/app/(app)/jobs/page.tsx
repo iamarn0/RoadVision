@@ -17,7 +17,7 @@ export default function JobsPage() {
     <section className="space-y-4">
       <div>
         <h1 className="text-xl font-medium">Processing</h1>
-        <p className="mt-1 text-sm text-[#9aa8b5]">ANPR jobs running on uploaded footage.</p>
+        <p className="mt-1 text-sm text-[var(--muted)]">ANPR jobs running on uploaded footage.</p>
       </div>
       {jobs.isLoading && <Skeleton className="h-40" />}
       {jobs.isError && <p className="text-sm text-[#c45c5c]">Unable to load jobs.</p>}
@@ -30,7 +30,7 @@ export default function JobsPage() {
       {jobs.data && jobs.data.length > 0 && (
         <Card className="overflow-x-auto p-0">
           <table className="min-w-full text-left text-sm">
-            <thead className="border-b border-[#2a3441] text-xs uppercase tracking-wide text-[#9aa8b5]">
+            <thead className="border-b border-[var(--border)] text-xs uppercase tracking-wide text-[var(--muted)]">
               <tr>
                 <th className="px-4 py-3">Video</th>
                 <th className="px-4 py-3">Status</th>
@@ -42,9 +42,9 @@ export default function JobsPage() {
             </thead>
             <tbody>
               {jobs.data.map((job) => (
-                <tr key={job.id} className="border-b border-[#2a3441]">
+                <tr key={job.id} className="border-b border-[var(--border)]">
                   <td className="px-4 py-3">
-                    <Link href={`/jobs/${job.id}`} className="text-[#2f9e9e] hover:underline">
+                    <Link href={`/jobs/${job.id}`} className="text-[var(--accent)] hover:underline">
                       {job.source_filename ?? job.id.slice(0, 8)}
                     </Link>
                   </td>

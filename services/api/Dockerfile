@@ -6,6 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
 COPY services/api/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
+COPY VERSION ./VERSION
 COPY packages ./packages
 COPY services/api/app ./app
 COPY services/api/alembic ./alembic

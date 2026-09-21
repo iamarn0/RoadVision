@@ -2,6 +2,8 @@
 
 RoadVision is intended to run as five Compose services: `web`, `api`, `worker`, `postgres`, `redis`.
 
+Product versioning and GitHub Releases are separate from this deploy path. See [versioning.md](versioning.md).
+
 ## Compose
 
 ```bash

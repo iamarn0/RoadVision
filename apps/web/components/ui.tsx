@@ -11,7 +11,7 @@ export function Card({
   className?: string;
 }) {
   return (
-    <div className={cn("rounded-sm border border-[#2a3441] bg-[#161d27] p-4", className)}>
+    <div className={cn("rounded-sm border border-[var(--border)] bg-[var(--panel)] p-4", className)}>
       {children}
     </div>
   );
@@ -27,10 +27,10 @@ export function Button({
 }) {
   const styles =
     variant === "primary"
-      ? "bg-[#2f9e9e] text-[#0f1419] hover:bg-[#3bb3b3]"
+      ? "bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]"
       : variant === "danger"
-        ? "border border-[#c45c5c] text-[#c45c5c] hover:bg-[#2a1c1c]"
-        : "border border-[#2a3441] text-[#e8edf2] hover:bg-[#1a222d]";
+        ? "border border-[var(--danger)] text-[var(--danger)] hover:bg-red-50"
+        : "border border-[var(--border)] text-[var(--text)] hover:bg-[var(--hover)]";
   return (
     <button
       className={cn(
@@ -49,7 +49,7 @@ export function Badge({ children, className }: { children: React.ReactNode; clas
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-sm border border-[#2a3441] px-2 py-0.5 text-xs uppercase tracking-wide",
+        "inline-flex items-center rounded-sm border border-[var(--border)] px-2 py-0.5 text-xs uppercase tracking-wide",
         className,
       )}
     >
@@ -60,19 +60,19 @@ export function Badge({ children, className }: { children: React.ReactNode; clas
 
 export function EmptyState({ title, description }: { title: string; description: string }) {
   return (
-    <div className="rounded-sm border border-dashed border-[#2a3441] bg-[#121821] px-6 py-10 text-center">
-      <p className="text-sm font-medium text-[#e8edf2]">{title}</p>
-      <p className="mt-2 text-sm text-[#9aa8b5]">{description}</p>
+    <div className="rounded-sm border border-dashed border-[var(--border)] bg-[var(--panel)] px-6 py-10 text-center">
+      <p className="text-sm font-medium text-[var(--text)]">{title}</p>
+      <p className="mt-2 text-sm text-[var(--muted)]">{description}</p>
     </div>
   );
 }
 
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn("animate-pulse rounded-sm bg-[#1d2836]", className)} />;
+  return <div className={cn("animate-pulse rounded-sm bg-[var(--hover)]", className)} />;
 }
 
 const fieldClass =
-  "mt-1 w-full rounded-sm border border-[#2a3441] bg-[#0b0f14] px-3 py-2 text-sm text-[#e8edf2] outline-none focus:border-[#2f9e9e]";
+  "mt-1 w-full rounded-sm border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]";
 
 export function TextField({
   label,
@@ -81,7 +81,7 @@ export function TextField({
 }: React.InputHTMLAttributes<HTMLInputElement> & { label: string }) {
   return (
     <label className="block text-sm">
-      <span className="text-[#9aa8b5]">{label}</span>
+      <span className="text-[var(--muted)]">{label}</span>
       <input className={cn(fieldClass, className)} {...props} />
     </label>
   );
@@ -95,7 +95,7 @@ export function SelectField({
 }: React.SelectHTMLAttributes<HTMLSelectElement> & { label: string; children: ReactNode }) {
   return (
     <label className="block text-sm">
-      <span className="text-[#9aa8b5]">{label}</span>
+      <span className="text-[var(--muted)]">{label}</span>
       <select className={cn(fieldClass, className)} {...props}>
         {children}
       </select>
@@ -139,7 +139,7 @@ export function Modal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <button
         type="button"
-        className="absolute inset-0 bg-[#0b0f14]/80 backdrop-blur-[2px]"
+        className="absolute inset-0 bg-[#161616]/50 backdrop-blur-[2px]"
         aria-label="Close dialog"
         onClick={onClose}
       />
@@ -148,20 +148,20 @@ export function Modal({
         aria-modal="true"
         aria-labelledby="modal-title"
         className={cn(
-          "relative z-10 flex max-h-[90vh] w-full flex-col overflow-hidden rounded-sm border border-[#2a3441] bg-[#121821] shadow-xl",
+          "relative z-10 flex max-h-[90vh] w-full flex-col overflow-hidden rounded-sm border border-[var(--border)] bg-[var(--panel)] shadow-xl",
           resolvedSize === "xl" && "max-w-5xl",
           resolvedSize === "lg" && "max-w-2xl",
           resolvedSize === "md" && "max-w-md",
         )}
       >
-        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[#2a3441] px-5 py-4">
-          <h2 id="modal-title" className="text-base font-medium text-[#e8edf2]">
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
+          <h2 id="modal-title" className="text-base font-medium text-[var(--text)]">
             {title}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-sm px-2 py-1 text-sm text-[#9aa8b5] hover:bg-[#1a222d] hover:text-white"
+            className="rounded-sm px-2 py-1 text-sm text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
           >
             Close
           </button>
@@ -193,7 +193,7 @@ export function ConfirmDialog({
 }) {
   return (
     <Modal open={open} title={title} onClose={onCancel}>
-      <p className="text-sm text-[#9aa8b5]">{message}</p>
+      <p className="text-sm text-[var(--muted)]">{message}</p>
       <div className="mt-5 flex justify-end gap-2">
         <Button type="button" variant="ghost" onClick={onCancel} disabled={pending}>
           Cancel

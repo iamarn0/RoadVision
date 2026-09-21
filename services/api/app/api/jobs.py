@@ -44,6 +44,10 @@ def _live_frame_path(job_id: UUID) -> Path:
     return (_storage_root() / "processed" / str(job_id) / "live.jpg").resolve()
 
 
+def _live_raw_path(job_id: UUID) -> Path:
+    return (_storage_root() / "processed" / str(job_id) / "live_raw.jpg").resolve()
+
+
 def _captures_dir(job_id: UUID) -> Path:
     return (_storage_root() / "processed" / str(job_id) / "captures").resolve()
 
@@ -137,13 +141,15 @@ def _job_overlay_clock(job: ProcessingJob, captures_dir: Path) -> dict[str, Any]
 
 
 def _save_live_snapshot(job: ProcessingJob, db: Session | None = None) -> Path:
+    raw = _live_raw_path(job.id)
     live = _live_frame_path(job.id)
-    if not live.exists():
+    src = raw if raw.exists() else live
+    if not src.exists():
         raise AppError(ErrorCodes.NOT_FOUND, "Live frame is not available yet", status_code=404)
     captures_dir = _captures_dir(job.id)
     captures_dir.mkdir(parents=True, exist_ok=True)
     dest = captures_dir / f"snapshot_{_next_snapshot_index(captures_dir)}.jpg"
-    copy2(live, dest)
+    copy2(src, dest)
     video = VideoRepository(db).get(job.video_id) if db is not None else None
     fps = float(getattr(video, "fps", 0) or 25.0) or 25.0
     seconds = float(job.current_frame or 0) / fps
@@ -243,10 +249,7 @@ def get_job(job_id: UUID, _: RequireReader, db: Session = Depends(get_db)) -> Jo
 
 
 @router.get("/api/jobs/{job_id}/live-frame", summary="Latest annotated live frame JPEG")
-def get_live_frame(job_id: UUID, _: RequireReader, db: Session = Depends(get_db)) -> FileResponse:
-    job = JobRepository(db).get(job_id)
-    if not job:
-        raise AppError(ErrorCodes.NOT_FOUND, "Job not found", status_code=404)
+def get_live_frame(job_id: UUID, _: RequireReader) -> FileResponse:
     path = _live_frame_path(job_id)
     if not path.exists():
         raise AppError(ErrorCodes.NOT_FOUND, "Live frame is not available yet", status_code=404)
@@ -299,11 +302,7 @@ def get_live_snapshot(
     job_id: UUID,
     snapshot_id: int,
     _: RequireReader,
-    db: Session = Depends(get_db),
 ) -> FileResponse:
-    job = JobRepository(db).get(job_id)
-    if not job:
-        raise AppError(ErrorCodes.NOT_FOUND, "Job not found", status_code=404)
     path = _captures_dir(job_id) / f"snapshot_{snapshot_id}.jpg"
     if not path.exists():
         raise AppError(ErrorCodes.NOT_FOUND, "Capture not found", status_code=404)
@@ -320,13 +319,9 @@ def get_live_capture_image(
     track_id: int,
     kind: str,
     _: RequireReader,
-    db: Session = Depends(get_db),
 ) -> FileResponse:
     if kind not in {"plate", "vehicle", "full"}:
         raise AppError(ErrorCodes.VALIDATION_ERROR, "kind must be plate, vehicle, or full", status_code=400)
-    job = JobRepository(db).get(job_id)
-    if not job:
-        raise AppError(ErrorCodes.NOT_FOUND, "Job not found", status_code=404)
     filename = {"plate": f"track_{track_id}.jpg", "vehicle": f"vehicle_{track_id}.jpg", "full": f"full_{track_id}.jpg"}[kind]
     path = _captures_dir(job_id) / filename
     if not path.exists():

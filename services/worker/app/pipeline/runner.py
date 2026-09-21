@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,17 +17,28 @@ from app.config import PROFILES, Settings, get_settings
 from app.detection.detector import ModelNotFoundError, VehicleDetector
 from app.pipeline.association import associate_plates
 from app.pipeline.capture_merge import find_same_passage
-from app.pipeline.plate_search import search_plates_in_vehicles, skip_ids_with_strong_evidence
+from app.pipeline.plate_search import (
+    MIN_PLATE_SEARCH_AREA,
+    search_plates_in_vehicles,
+    skip_ids_with_strong_evidence,
+    vehicle_capture_pads,
+)
 from packages.capture_index import plate_index_item, replace_plate_items
 from app.pipeline.video_source import UploadedFileSource
 from app.plate_detection.detector import PlateDetector
 from app.preprocessing.plates import (
+    JPEG_EVIDENCE_QUALITY,
+    JPEG_PLATE_QUALITY,
+    PLATE_CROP_PAD_DAY,
+    PLATE_CROP_PAD_NIGHT,
     ROI_ENHANCE_LUMINANCE_MAX,
     crop_box,
+    crop_box_asymmetric,
     enhance_low_light_frame,
-    enhance_night_plate_crop,
     frame_luminance,
     has_plate_evidence,
+    is_better_evidence,
+    save_jpeg,
 )
 from app.rendering.annotate import AnnotatedVideoRenderer, draw_overlay
 from app.tracking.tracker import VehicleTracker
@@ -127,11 +139,60 @@ def _write_manual_captures(captures_dir: Path, last_associated: list[dict[str, A
         track_id = item.get("track_id")
         if track_id is None or plate_img is None or getattr(plate_img, "size", 0) == 0:
             continue
-        cv2.imwrite(str(captures_dir / f"track_{track_id}.jpg"), plate_img)
+        save_jpeg(captures_dir / f"track_{track_id}.jpg", plate_img, JPEG_PLATE_QUALITY)
         if vehicle_img is not None and getattr(vehicle_img, "size", 0) > 0:
-            cv2.imwrite(str(captures_dir / f"vehicle_{track_id}.jpg"), vehicle_img)
+            save_jpeg(captures_dir / f"vehicle_{track_id}.jpg", vehicle_img, JPEG_EVIDENCE_QUALITY)
         written += 1
     return written
+
+
+def _publish_startup_frame(video_path: Path, live_frame_path: Path, live_raw_path: Path) -> bool:
+    """Write the first decoded frame so the UI can play before models load."""
+    cap = cv2.VideoCapture(str(video_path))
+    try:
+        ok, image = cap.read()
+        if not ok or image is None:
+            logger.warning("startup preview: could not read first frame from %s", video_path)
+            return False
+        save_jpeg(live_raw_path, image, JPEG_EVIDENCE_QUALITY)
+        encoded_ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        if encoded_ok:
+            live_frame_path.write_bytes(encoded.tobytes())
+        logger.info("startup preview published")
+        return True
+    except Exception:
+        logger.exception("startup preview failed")
+        return False
+    finally:
+        cap.release()
+
+
+def _write_live_frames(live_frame_path: Path, live_raw_path: Path, overlay: Any, raw_image: Any) -> bytes | None:
+    ok, encoded = cv2.imencode(".jpg", overlay, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+    jpeg = encoded.tobytes() if ok else None
+    if jpeg:
+        live_frame_path.write_bytes(jpeg)
+    if raw_image is not None and getattr(raw_image, "size", 0) > 0:
+        save_jpeg(live_raw_path, raw_image, JPEG_EVIDENCE_QUALITY)
+    return jpeg
+
+
+def _start_overlay_clock(video_path: Path) -> tuple[threading.Thread, dict[str, Any]]:
+    holder: dict[str, Any] = {"clock": None, "done": False}
+
+    def _run() -> None:
+        try:
+            from app.ocr.overlay import extract_overlay_clock_from_video
+
+            holder["clock"] = extract_overlay_clock_from_video(video_path)
+        except Exception:
+            logger.exception("overlay clock extraction skipped")
+        finally:
+            holder["done"] = True
+
+    thread = threading.Thread(target=_run, name="overlay-clock", daemon=True)
+    thread.start()
+    return thread, holder
 
 
 def _sync_captures_index(
@@ -150,8 +211,135 @@ def _sync_captures_index(
             vehicle_confidence=capture.get("vehicle_confidence"),
         )
         for track_id, capture in best_by_track.items()
+        if capture.get("published")
     ]
     replace_plate_items(captures_dir, items, overlay_clock)
+
+
+SHRINK_PUBLISH_STREAK = 2
+
+
+def capture_is_due_to_publish(
+    capture: dict[str, Any],
+    visible: bool,
+    shrink_threshold: int = SHRINK_PUBLISH_STREAK,
+) -> bool:
+    if capture.get("published"):
+        return False
+    if not visible:
+        return True
+    return int(capture.get("shrink_streak") or 0) >= shrink_threshold
+
+
+def _note_vehicle_motion(capture: dict[str, Any], area: float) -> None:
+    prev_area = float(capture.get("last_vehicle_area") or 0.0)
+    if prev_area > 0 and area < prev_area * 0.95:
+        capture["shrink_streak"] = int(capture.get("shrink_streak") or 0) + 1
+    elif area >= prev_area * 1.05:
+        capture["shrink_streak"] = 0
+    capture["last_vehicle_area"] = area
+
+
+def _capture_for_vehicle(
+    best_by_track: dict[int, dict[str, Any]],
+    track_id: int,
+) -> tuple[int | None, dict[str, Any] | None]:
+    direct = best_by_track.get(track_id)
+    if direct is not None:
+        return track_id, direct
+    for cid, capture in best_by_track.items():
+        if track_id in (capture.get("source_ids") or []):
+            return cid, capture
+        if capture.get("active_tid") == track_id:
+            return cid, capture
+    return None, None
+
+
+def _vehicle_is_published(track_id: int, best_by_track: dict[int, dict[str, Any]]) -> bool:
+    _cid, capture = _capture_for_vehicle(best_by_track, track_id)
+    return bool(capture and capture.get("published"))
+
+
+def _best_lookup(best_by_track: dict[int, dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    lookup = dict(best_by_track)
+    for capture in best_by_track.values():
+        for sid in capture.get("source_ids") or []:
+            lookup.setdefault(int(sid), capture)
+        active = capture.get("active_tid")
+        if active is not None:
+            lookup.setdefault(int(active), capture)
+    return lookup
+
+
+def _publish_track_capture(
+    captures_dir: Path,
+    capture_id: int,
+    capture: dict[str, Any],
+    overlay_clock: dict[str, Any] | None,
+) -> bool:
+    if capture.get("published"):
+        return False
+    plate = capture.get("image_plate")
+    if plate is None or getattr(plate, "size", 0) == 0:
+        capture["published"] = True
+        return False
+    vehicle_img = capture.get("image_vehicle")
+    full = capture.get("image_full")
+    save_jpeg(captures_dir / f"track_{capture_id}.jpg", plate, JPEG_PLATE_QUALITY)
+    if vehicle_img is not None and getattr(vehicle_img, "size", 0) > 0:
+        save_jpeg(captures_dir / f"vehicle_{capture_id}.jpg", vehicle_img, JPEG_EVIDENCE_QUALITY)
+    if full is not None and getattr(full, "size", 0) > 0:
+        save_jpeg(captures_dir / f"full_{capture_id}.jpg", full, JPEG_EVIDENCE_QUALITY)
+    sidecar = plate_index_item(
+        capture_id,
+        float(capture.get("first_seen") or 0.0),
+        float(capture.get("last_seen") or 0.0),
+        capture.get("vehicle_type"),
+        overlay_clock,
+        plate_confidence=capture.get("plate_confidence"),
+        vehicle_confidence=capture.get("vehicle_confidence"),
+    )
+    (captures_dir / f"track_{capture_id}.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    capture["published"] = True
+    return True
+
+
+def _publish_due_captures(
+    captures_dir: Path,
+    vehicles: list[Any],
+    best_by_track: dict[int, dict[str, Any]],
+    overlay_clock: dict[str, Any] | None,
+) -> int:
+    active = {v.track_id for v in vehicles}
+    for vehicle in vehicles:
+        _cid, capture = _capture_for_vehicle(best_by_track, vehicle.track_id)
+        if capture is None:
+            continue
+        capture["active_tid"] = vehicle.track_id
+        ids = set(capture.get("source_ids") or [])
+        ids.add(vehicle.track_id)
+        capture["source_ids"] = ids
+        _note_vehicle_motion(capture, vehicle.detection.bounding_box.area)
+    written = 0
+    for capture_id, capture in best_by_track.items():
+        live_id = capture.get("active_tid", capture_id)
+        visible = capture_id in active or live_id in active or bool(active.intersection(capture.get("source_ids") or []))
+        if capture_is_due_to_publish(capture, visible):
+            if _publish_track_capture(captures_dir, capture_id, capture, overlay_clock):
+                written += 1
+    return written
+
+
+def _publish_all_pending(
+    captures_dir: Path,
+    best_by_track: dict[int, dict[str, Any]],
+    overlay_clock: dict[str, Any] | None,
+) -> int:
+    written = 0
+    for capture_id, capture in best_by_track.items():
+        if _publish_track_capture(captures_dir, capture_id, capture, overlay_clock):
+            written += 1
+    return written
 
 
 def _handle_manual_capture(job_id: str, captures_dir: Path, last_associated: list[dict[str, Any]]) -> None:
@@ -218,6 +406,14 @@ def process_job(db: Session, job_id: UUID) -> None:
         _fail(db, job, "STORAGE_ERROR", f"Original video is missing: {video.storage_key}")
         return
 
+    live_dir = storage_root / "processed" / str(job.id)
+    captures_dir = live_dir / "captures"
+    live_dir.mkdir(parents=True, exist_ok=True)
+    captures_dir.mkdir(parents=True, exist_ok=True)
+    live_frame_path = live_dir / "live.jpg"
+    live_raw_path = live_dir / "live_raw.jpg"
+    _publish_startup_frame(video_path, live_frame_path, live_raw_path)
+
     try:
         selection = select_device(
             settings.processing_device,
@@ -241,20 +437,31 @@ def process_job(db: Session, job_id: UUID) -> None:
         selection.cuda_available,
     )
 
-    overlay_clock = None
-    try:
-        from app.ocr.overlay import extract_overlay_clock_from_video
+    overlay_clock: dict[str, Any] | None = None
+    overlay_applied = False
+    overlay_thread, overlay_holder = _start_overlay_clock(video_path)
+    best_by_track: dict[int, dict[str, Any]] = {}
+    vehicle_meta: dict[int, dict[str, Any]] = {}
 
-        overlay_clock = extract_overlay_clock_from_video(video_path)
-        if overlay_clock:
-            logger.info("video overlay clock origin=%s", overlay_clock.get("origin_iso"))
-            metrics = dict(job.metrics or {})
-            metrics["overlay_clock"] = overlay_clock
-            job.metrics = metrics
-            flag_modified(job, "metrics")
+    def _maybe_apply_overlay_clock() -> None:
+        nonlocal overlay_clock, overlay_applied
+        if overlay_applied:
+            return
+        clock = overlay_holder.get("clock")
+        if not clock:
+            return
+        overlay_clock = clock
+        overlay_applied = True
+        logger.info("video overlay clock origin=%s", overlay_clock.get("origin_iso"))
+        metrics = dict(job.metrics or {})
+        metrics["overlay_clock"] = overlay_clock
+        job.metrics = metrics
+        flag_modified(job, "metrics")
+        try:
             db.commit()
-    except Exception:
-        logger.exception("overlay clock extraction skipped")
+        except Exception:
+            logger.exception("overlay clock persist skipped")
+        _sync_captures_index(captures_dir, best_by_track, overlay_clock)
 
     try:
         vehicle_detector = VehicleDetector(
@@ -286,16 +493,6 @@ def process_job(db: Session, job_id: UUID) -> None:
         return
 
     tracker = VehicleTracker(vehicle_detector)
-    # Best plate capture per vehicle track (no OCR).
-    best_by_track: dict[int, dict[str, Any]] = {}
-    vehicle_meta: dict[int, dict[str, Any]] = {}
-    live_dir = storage_root / "processed" / str(job.id)
-    captures_dir = live_dir / "captures"
-    live_dir.mkdir(parents=True, exist_ok=True)
-    captures_dir.mkdir(parents=True, exist_ok=True)
-    if overlay_clock:
-        replace_plate_items(captures_dir, [], overlay_clock)
-    live_frame_path = live_dir / "live.jpg"
 
     source = UploadedFileSource(video_path, source_id=str(video.id))
     annotated_rel = f"processed/{job.id}.mp4"
@@ -312,7 +509,7 @@ def process_job(db: Session, job_id: UUID) -> None:
     paused_total = 0.0
     last_associated: list[dict[str, Any]] = []
     last_manual_targets: list[dict[str, Any]] = []
-    last_vehicle_areas: dict[int, float] = {}
+    last_search_areas: dict[int, float] = {}
     last_overlay = None
     last_vehicles: list = []
     last_infer_index = -10_000
@@ -353,6 +550,7 @@ def process_job(db: Session, job_id: UUID) -> None:
                     playback_origin += pause_duration
 
             _handle_manual_capture(str(job.id), captures_dir, last_manual_targets)
+            _maybe_apply_overlay_clock()
 
             video_ts = frame.timestamp if frame.timestamp is not None else frame.index * frame_duration
             # Clock starts on the first decoded frame so overlay OCR / model load
@@ -363,7 +561,12 @@ def process_job(db: Session, job_id: UUID) -> None:
             now = time.perf_counter()
             behind = now > target_wall + frame_duration
             force_infer = frame.index - last_infer_index >= 5
-            if behind and not force_infer:
+            all_published = bool(best_by_track) and all(c.get("published") for c in best_by_track.values())
+            visible_published = bool(last_vehicles) and all(
+                _vehicle_is_published(v.track_id, best_by_track) for v in last_vehicles
+            )
+            cheap_behind = behind and not force_infer and visible_published and all_published
+            if cheap_behind:
                 skipped += 1
                 shown = draw_overlay(
                     frame.image,
@@ -380,9 +583,7 @@ def process_job(db: Session, job_id: UUID) -> None:
                     job.estimated_remaining_seconds = max(0.0, (meta.frame_count - frame.index - 1) / source_fps)
                     job.progress = min(99.0, 100.0 * (frame.index + 1) / meta.frame_count)
                 if skipped % 2 == 0:
-                    ok, encoded = cv2.imencode(".jpg", shown, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-                    if ok:
-                        live_frame_path.write_bytes(encoded.tobytes())
+                    _write_live_frames(live_frame_path, live_raw_path, shown, frame.image)
                 if skipped % 10 == 0:
                     db.commit()
                 continue
@@ -436,8 +637,15 @@ def process_job(db: Session, job_id: UUID) -> None:
             interval = 2
             detecting_plates = frame.index - last_plate_frame >= interval
             if detecting_plates:
-                skip_ids = skip_ids_with_strong_evidence(vehicles, best_by_track, last_vehicle_areas)
+                skip_ids = skip_ids_with_strong_evidence(vehicles, _best_lookup(best_by_track), last_search_areas)
                 detect_conf = min(float(plate_detector.confidence), 0.22) if dark else None
+                for vehicle in vehicles:
+                    if vehicle.track_id in skip_ids:
+                        continue
+                    box = vehicle.detection.bounding_box
+                    if box.area < MIN_PLATE_SEARCH_AREA:
+                        continue
+                    last_search_areas[vehicle.track_id] = box.area
                 associated = search_plates_in_vehicles(
                     frame.image,
                     vehicles,
@@ -460,8 +668,6 @@ def process_job(db: Session, job_id: UUID) -> None:
                     associated.extend(pair for pair in fallback if pair[0].track_id not in taken)
                     last_full_plate_frame = frame.index
                 last_plate_frame = frame.index
-            for v in vehicles:
-                last_vehicle_areas[v.track_id] = v.detection.bounding_box.area
 
             frame_crops: list[dict[str, Any]] = []
             accepted_associated: list = []
@@ -469,10 +675,11 @@ def process_job(db: Session, job_id: UUID) -> None:
                 x1, y1, x2, y2 = plate.bounding_box.clip(meta.width, meta.height).as_int()
                 vx1, vy1, vx2, vy2 = vehicle.detection.bounding_box.clip(meta.width, meta.height).as_int()
                 plate_img = crop_box(frame.image, x1, y1, x2, y2, pad=0.08)
-                vehicle_img = crop_box(frame.image, vx1, vy1, vx2, vy2, pad=0.06 if dark else 0.08)
+                pad_l, pad_t, pad_r, pad_b = vehicle_capture_pads(vehicle.detection.class_name)
+                vehicle_img, _, _ = crop_box_asymmetric(frame.image, vx1, vy1, vx2, vy2, pad_l, pad_t, pad_r, pad_b)
                 if plate_img.size == 0:
                     continue
-                ok, score, _sharp = has_plate_evidence(
+                ok, score, sharp = has_plate_evidence(
                     plate_img,
                     float(x2 - x1),
                     float(y2 - y1),
@@ -481,10 +688,10 @@ def process_job(db: Session, job_id: UUID) -> None:
                 )
                 if not ok:
                     continue
-                saved_src = crop_box(frame.image, x1, y1, x2, y2, pad=0.18 if dark else 0.08)
-                if saved_src.size == 0:
-                    saved_src = plate_img
-                saved_plate = enhance_night_plate_crop(saved_src) if dark else saved_src
+                plate_pad = PLATE_CROP_PAD_NIGHT if dark else PLATE_CROP_PAD_DAY
+                saved_plate = crop_box(frame.image, x1, y1, x2, y2, pad=plate_pad)
+                if saved_plate.size == 0:
+                    saved_plate = plate_img
                 accepted_associated.append((vehicle, plate))
                 observation = {
                     "frame_number": frame.index,
@@ -513,14 +720,21 @@ def process_job(db: Session, job_id: UUID) -> None:
                         "image_vehicle": vehicle_img.copy() if vehicle_img.size else None,
                     }
                 )
-                if previous and previous["score"] >= score:
+                plate_area = float(max(1, x2 - x1) * max(1, y2 - y1))
+                if previous and not is_better_evidence(previous, score, plate_area, sharp):
                     previous["last_seen"] = frame.timestamp
                     previous["observations"].append(observation)
                     continue
                 observations = (previous or {}).get("observations", [])
                 observations.append(observation)
+                source_ids = set((previous or {}).get("source_ids") or [])
+                source_ids.add(vehicle.track_id)
+                source_ids.add(capture_id)
+                was_published = bool((previous or {}).get("published"))
                 best_by_track[capture_id] = {
                     "score": score,
+                    "sharp": sharp,
+                    "plate_area": plate_area,
                     "first_seen": (previous or {}).get("first_seen", frame.timestamp),
                     "last_seen": frame.timestamp,
                     "best_frame": frame.index,
@@ -533,27 +747,21 @@ def process_job(db: Session, job_id: UUID) -> None:
                     "image_vehicle": vehicle_img,
                     "image_plate": saved_plate,
                     "observations": observations,
+                    "published": False,
+                    "shrink_streak": int((previous or {}).get("shrink_streak") or 0),
+                    "last_vehicle_area": float((previous or {}).get("last_vehicle_area") or 0.0),
+                    "source_ids": source_ids,
+                    "active_tid": vehicle.track_id,
                 }
-                cv2.imwrite(str(captures_dir / f"track_{capture_id}.jpg"), saved_plate)
-                cv2.imwrite(str(captures_dir / f"vehicle_{capture_id}.jpg"), vehicle_img)
-                cv2.imwrite(str(captures_dir / f"full_{capture_id}.jpg"), frame.image)
-                sidecar = plate_index_item(
-                    capture_id,
-                    float(best_by_track[capture_id].get("first_seen") or 0.0),
-                    float(best_by_track[capture_id].get("last_seen") or 0.0),
-                    best_by_track[capture_id].get("vehicle_type"),
-                    overlay_clock,
-                    plate_confidence=best_by_track[capture_id].get("plate_confidence"),
-                    vehicle_confidence=best_by_track[capture_id].get("vehicle_confidence"),
-                )
-                (captures_dir / f"track_{capture_id}.json").write_text(json.dumps(sidecar), encoding="utf-8")
+                if was_published:
+                    _publish_track_capture(captures_dir, capture_id, best_by_track[capture_id], overlay_clock)
 
-            if accepted_associated:
+            published_now = _publish_due_captures(captures_dir, vehicles, best_by_track, overlay_clock)
+            if published_now:
                 index_dirty += 1
-                if not index_flushed or index_dirty >= 3:
-                    _sync_captures_index(captures_dir, best_by_track, overlay_clock)
-                    index_flushed = True
-                    index_dirty = 0
+                _sync_captures_index(captures_dir, best_by_track, overlay_clock)
+                index_flushed = True
+                index_dirty = 0
 
             associated = accepted_associated
 
@@ -580,12 +788,13 @@ def process_job(db: Session, job_id: UUID) -> None:
             last_overlay = overlay
             renderer.write(overlay)
 
-            ok, encoded = cv2.imencode(".jpg", overlay, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-            if ok and (processed == 0 or frame.index % 2 == 0):
-                live_frame_path.write_bytes(encoded.tobytes())
+            jpeg = None
+            if processed == 0 or frame.index % 2 == 0:
+                jpeg = _write_live_frames(live_frame_path, live_raw_path, overlay, frame.image)
+            if jpeg:
                 _publish_preview(
                     job.id,
-                    encoded.tobytes(),
+                    jpeg,
                     {
                         "job_id": str(job.id),
                         "status": "processing",
@@ -594,7 +803,7 @@ def process_job(db: Session, job_id: UUID) -> None:
                         "timestamp_seconds": frame.timestamp,
                         "source_fps": source_fps,
                         "vehicles_detected": len(vehicle_meta),
-                        "plates_captured": len(best_by_track),
+                        "plates_captured": sum(1 for cap in best_by_track.values() if cap.get("published")),
                         "progress": min(99.0, 100.0 * (frame.index + 1) / meta.frame_count) if meta.frame_count else 0,
                     },
                 )
@@ -612,7 +821,7 @@ def process_job(db: Session, job_id: UUID) -> None:
             job.estimated_remaining_seconds = remaining
             job.progress = min(99.0, 100.0 * (frame.index + 1) / meta.frame_count) if meta.frame_count else 0
             job.vehicles_detected = len(vehicle_meta)
-            job.plates_detected = len(best_by_track)
+            job.plates_detected = sum(1 for cap in best_by_track.values() if cap.get("published"))
             if processed % 5 == 0:
                 db.commit()
             try:
@@ -625,6 +834,10 @@ def process_job(db: Session, job_id: UUID) -> None:
                 pass
 
         job.status = JobStatus.FINALIZING.value
+        if not overlay_holder.get("done"):
+            overlay_thread.join(timeout=8.0)
+        _maybe_apply_overlay_clock()
+        _publish_all_pending(captures_dir, best_by_track, overlay_clock)
         _sync_captures_index(captures_dir, best_by_track, overlay_clock)
         db.commit()
         _persist(
@@ -743,7 +956,8 @@ def _persist(
                 continue
             filename = f"{kind}_{uuid4().hex}.jpg"
             path = folder / filename
-            cv2.imwrite(str(path), image)
+            quality = JPEG_PLATE_QUALITY if kind == "plate_crop" else JPEG_EVIDENCE_QUALITY
+            save_jpeg(path, image, quality)
             rel = f"evidence/{job.id}/track_{track_id}/{filename}"
             atype = {
                 "full_frame": AssetType.FULL_FRAME.value,

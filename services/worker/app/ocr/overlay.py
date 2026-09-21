@@ -91,32 +91,21 @@ def _read_from_image(engine: Any, image: Any, video_seconds: float) -> Optional[
     return None
 
 
-def _overlay_ocr_device() -> str:
-    from app.config import get_settings
-    from packages.device.probe import select_device
-
-    settings = get_settings()
-    mode = (settings.ocr_device or settings.processing_device or "auto").strip() or "auto"
-    try:
-        return select_device(mode, settings.cuda_device, False, False).device
-    except Exception:
-        return "cpu"
-
-
-def extract_overlay_clock_from_video(video_path: Path) -> Optional[dict]:
-    from app.ocr.engine import EasyOCREngine
+def extract_overlay_clock_from_video(video_path: Path, max_frames: int = 2) -> Optional[dict]:
+    from app.ocr.engine import get_ocr_engine
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         logger.warning("overlay clock: could not open %s", video_path)
         return None
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0) or 25.0
-    engine = None
-    device = _overlay_ocr_device()
+    # CPU keeps the GPU free for YOLO while this runs in the background.
+    device = "cpu"
+    frame_indexes = (0, 12, 25, 50, 75, 125)[: max(1, int(max_frames))]
     try:
-        logger.info("overlay clock OCR device=%s", device)
-        engine = EasyOCREngine(["en"], device)
-        for frame_index in (0, 12, 25, 50, 75, 125):
+        logger.info("overlay clock OCR device=%s frames=%s", device, frame_indexes)
+        engine = get_ocr_engine("easyocr", "en", device)
+        for frame_index in frame_indexes:
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
             ok, frame = cap.read()
             if not ok or frame is None:
@@ -129,13 +118,5 @@ def extract_overlay_clock_from_video(video_path: Path) -> Optional[dict]:
         return None
     finally:
         cap.release()
-        del engine
-        if device.startswith("cuda"):
-            try:
-                import torch
-
-                torch.cuda.empty_cache()
-            except Exception:
-                pass
     logger.warning("overlay clock: no timestamp parsed from %s", video_path)
     return None

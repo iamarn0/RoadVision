@@ -70,7 +70,7 @@ function CapturesTable({
   return (
     <div className={compact ? "max-h-[70vh] overflow-auto" : "overflow-x-auto"}>
       <table className="min-w-full text-left text-sm">
-        <thead className="sticky top-0 border-b border-[#2a3441] bg-[#161d27] text-xs uppercase tracking-wide text-[#9aa8b5]">
+        <thead className="sticky top-0 border-b border-[var(--border)] bg-[var(--panel)] text-xs uppercase tracking-wide text-[var(--muted)]">
           <tr>
             <th className="px-2 py-2">Plate</th>
             <th className="px-2 py-2">Vehicle</th>
@@ -82,7 +82,7 @@ function CapturesTable({
         </thead>
         <tbody>
           {rows.map((cap) => (
-            <tr key={`${cap.kind ?? "plate"}-${cap.track_id}-${cap.updated_at}`} className="border-b border-[#2a3441]">
+            <tr key={`${cap.kind ?? "plate"}-${cap.track_id}-${cap.updated_at}`} className="border-b border-[var(--border)]">
               <td className="px-2 py-2">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
@@ -93,7 +93,7 @@ function CapturesTable({
               </td>
               <td className="px-2 py-2">
                 {isSnapshot(cap) ? (
-                  <span className="text-[#9aa8b5]">Full frame</span>
+                  <span className="text-[var(--muted)]">Full frame</span>
                 ) : (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={captureSrc(cap, "vehicle")} alt={`Vehicle ${cap.track_id}`} className="h-10 w-20 bg-black object-contain" />
@@ -170,10 +170,6 @@ export default function JobDetailPage() {
     }
     const fps = j.source_fps && j.source_fps > 0 ? j.source_fps : 25;
     const target = Math.max(0, (j.current_frame || 0) / fps);
-    if (!liveReady && target < 0.2) {
-      if (!el.paused) el.pause();
-      return;
-    }
     const drift = el.currentTime - target;
     if (drift > 1.5) {
       if (!el.paused) el.pause();
@@ -187,7 +183,7 @@ export default function JobDetailPage() {
       }
     }
     if (el.paused) void el.play().catch(() => undefined);
-  }, [active, paused, liveReady, job.data?.current_frame, job.data?.source_fps, job.data?.status]);
+  }, [active, paused, job.data?.current_frame, job.data?.source_fps, job.data?.status]);
 
   const cancel = useMutation({
     mutationFn: () => apiPost<JobRead>(`/api/jobs/${jobId}/cancel`),
@@ -288,7 +284,7 @@ export default function JobDetailPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-medium">Live Detection</h1>
-          <p className="mt-1 text-sm text-[#9aa8b5]">{j.source_filename ?? j.id}</p>
+          <p className="mt-1 text-sm text-[var(--muted)]">{j.source_filename ?? j.id}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {active && (
@@ -322,21 +318,21 @@ export default function JobDetailPage() {
 
       <div className="grid gap-3 md:grid-cols-4">
         <Card>
-          <p className="text-xs uppercase text-[#9aa8b5]">Vehicles</p>
+          <p className="text-xs uppercase text-[var(--muted)]">Vehicles</p>
           <p className="mt-2 text-2xl">{j.vehicles_detected}</p>
         </Card>
         <Card>
-          <p className="text-xs uppercase text-[#9aa8b5]">Plates Captured</p>
+          <p className="text-xs uppercase text-[var(--muted)]">Plates Captured</p>
           <p className="mt-2 text-2xl">
             {liveCaptures.data?.plates_captured ?? j.plates_detected}
           </p>
         </Card>
         <Card>
-          <p className="text-xs uppercase text-[#9aa8b5]">Source FPS</p>
+          <p className="text-xs uppercase text-[var(--muted)]">Source FPS</p>
           <p className="mt-2 text-2xl">{j.source_fps?.toFixed(1) ?? "—"}</p>
         </Card>
         <Card>
-          <p className="text-xs uppercase text-[#9aa8b5]">Status</p>
+          <p className="text-xs uppercase text-[var(--muted)]">Status</p>
           <p className={`mt-2 text-lg ${statusTone(paused ? "paused" : j.status)}`}>
             {paused ? "paused" : statusLabel(j.status)}
           </p>
@@ -346,9 +342,9 @@ export default function JobDetailPage() {
       {(active || j.status === "queued") && (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(280px,0.9fr)]">
           <Card className="overflow-hidden p-0">
-            <div className="border-b border-[#2a3441] px-4 py-3">
+            <div className="border-b border-[var(--border)] px-4 py-3">
               <h2 className="text-sm font-medium">Realtime processing</h2>
-              <p className="mt-1 text-xs text-[#9aa8b5]">
+              <p className="mt-1 text-xs text-[var(--muted)]">
                 Video plays at the original FPS. Pause to inspect a frame, then capture that picture — plates are saved too when found.
               </p>
             </div>
@@ -371,7 +367,7 @@ export default function JobDetailPage() {
                   <track kind="captions" />
                 </video>
               ) : (
-                <div className="flex h-full items-center justify-center text-sm text-[#9aa8b5]">
+                <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
                   Waiting for first frame…
                 </div>
               )}
@@ -423,8 +419,8 @@ export default function JobDetailPage() {
                 {controlError && <p className="text-sm text-[#c45c5c]">{controlError}</p>}
                 {captureError && <p className="text-sm text-[#c45c5c]">{captureError}</p>}
               </div>
-              <div className="h-1.5 overflow-hidden rounded-sm bg-[#1d2836]">
-                <div className="h-full bg-[#2f9e9e]" style={{ width: `${Math.min(100, j.progress)}%` }} />
+              <div className="h-1.5 overflow-hidden rounded-sm bg-[var(--border)]">
+                <div className="h-full bg-[var(--accent)]" style={{ width: `${Math.min(100, j.progress)}%` }} />
               </div>
               <div className="grid gap-2 text-sm md:grid-cols-3">
                 <p>
@@ -455,7 +451,7 @@ export default function JobDetailPage() {
                   aria-label="Sort captures"
                   value={sort}
                   onChange={(e) => setSort(e.target.value as "newest" | "oldest")}
-                  className="rounded-sm border border-[#2a3441] bg-[#121821] px-2 py-1 text-xs"
+                  className="rounded-sm border border-[var(--border)] bg-[var(--panel)] px-2 py-1 text-xs"
                 >
                   <option value="newest">Newest</option>
                   <option value="oldest">Oldest</option>
@@ -477,7 +473,7 @@ export default function JobDetailPage() {
         <Card className="border-[#5a3030]">
           <h2 className="text-sm font-medium text-[#c45c5c]">Processing failed</h2>
           <p className="mt-2 whitespace-pre-wrap text-sm">{j.error_message ?? "Unknown error"}</p>
-          {j.error_code && <p className="mt-2 text-xs text-[#9aa8b5]">Error code: {j.error_code}</p>}
+          {j.error_code && <p className="mt-2 text-xs text-[var(--muted)]">Error code: {j.error_code}</p>}
         </Card>
       )}
 
@@ -490,7 +486,7 @@ export default function JobDetailPage() {
                 <track kind="captions" />
               </video>
             ) : (
-              <p className="text-sm text-[#9aa8b5]">Annotated video is not available.</p>
+              <p className="text-sm text-[var(--muted)]">Annotated video is not available.</p>
             )}
           </Card>
 
@@ -502,7 +498,7 @@ export default function JobDetailPage() {
                   aria-label="Sort captures"
                   value={sort}
                   onChange={(e) => setSort(e.target.value as "newest" | "oldest")}
-                  className="rounded-sm border border-[#2a3441] bg-[#121821] px-2 py-1 text-xs"
+                  className="rounded-sm border border-[var(--border)] bg-[var(--panel)] px-2 py-1 text-xs"
                 >
                   <option value="newest">Newest</option>
                   <option value="oldest">Oldest</option>
@@ -525,62 +521,62 @@ export default function JobDetailPage() {
           <div className="space-y-4">
             <div className="grid gap-2 text-sm md:grid-cols-2">
               <p>
-                <span className="text-[#9aa8b5]">Status: </span>
+                <span className="text-[var(--muted)]">Status: </span>
                 {isSnapshot(previewCap) ? "Snapshot" : "Captured"}
               </p>
               <p>
-                <span className="text-[#9aa8b5]">Confidence: </span>
+                <span className="text-[var(--muted)]">Confidence: </span>
                 {isSnapshot(previewCap) ? "—" : formatConfidence(previewCap.plate_confidence)}
               </p>
               <p>
-                <span className="text-[#9aa8b5]">Type: </span>
+                <span className="text-[var(--muted)]">Type: </span>
                 {isSnapshot(previewCap) ? "Snapshot" : previewCap.vehicle_type || "—"}
               </p>
               <p>
-                <span className="text-[#9aa8b5]">Track: </span>
+                <span className="text-[var(--muted)]">Track: </span>
                 {isSnapshot(previewCap) ? `S#${previewCap.track_id}` : `#${previewCap.track_id}`}
               </p>
               <p className="md:col-span-2">
-                <span className="text-[#9aa8b5]">Seen: </span>
+                <span className="text-[var(--muted)]">Seen: </span>
                 {captureTimeLabel(previewCap)}
               </p>
             </div>
             {isSnapshot(previewCap) ? (
               <div>
-                <p className="mb-2 text-xs uppercase text-[#9aa8b5]">Full frame</p>
+                <p className="mb-2 text-xs uppercase text-[var(--muted)]">Full frame</p>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={captureSrc(previewCap, "full")} alt="Manual snapshot" className="max-h-[70vh] w-full bg-black object-contain" />
               </div>
             ) : (
-              <div className="grid gap-4 md:grid-cols-3">
-                <div>
-                  <p className="mb-2 text-xs uppercase text-[#9aa8b5]">Full frame</p>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="md:col-span-2">
+                  <p className="mb-2 text-xs uppercase text-[var(--muted)]">Full frame</p>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={captureSrc(previewCap, "full")}
                     alt="Full frame"
-                    className="mx-auto max-h-[42vh] w-auto max-w-full bg-black object-contain"
+                    className="mx-auto max-h-[70vh] w-auto max-w-full bg-black object-contain"
                     onError={(event) => {
                       event.currentTarget.style.display = "none";
                     }}
                   />
                 </div>
                 <div>
-                  <p className="mb-2 text-xs uppercase text-[#9aa8b5]">Vehicle</p>
+                  <p className="mb-2 text-xs uppercase text-[var(--muted)]">Vehicle</p>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={captureSrc(previewCap, "vehicle")}
                     alt="Vehicle crop"
-                    className="mx-auto max-h-[42vh] w-auto max-w-full bg-black object-contain"
+                    className="mx-auto max-h-[64vh] w-auto max-w-full bg-black object-contain"
                   />
                 </div>
                 <div>
-                  <p className="mb-2 text-xs uppercase text-[#9aa8b5]">Plate</p>
+                  <p className="mb-2 text-xs uppercase text-[var(--muted)]">Plate</p>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={captureSrc(previewCap, "plate")}
                     alt="Plate crop"
-                    className="mx-auto max-h-[42vh] w-auto max-w-full bg-black object-contain"
+                    className="mx-auto max-h-[32vh] w-full max-w-full bg-black object-contain"
                   />
                 </div>
               </div>

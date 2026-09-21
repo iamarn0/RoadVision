@@ -27,6 +27,6 @@ export function statusTone(status: string): string {
     case "not_configured":
       return "text-[#c45c5c]";
     default:
-      return "text-[#9aa8b5]";
+      return "text-[var(--muted)]";
   }
 }

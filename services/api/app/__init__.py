@@ -15,4 +15,6 @@ for _path in (str(_REPO_ROOT), str(_API_ROOT)):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-APP_VERSION = "0.1.0"
+from packages.app_meta import read_app_version
+
+APP_VERSION = read_app_version()

@@ -1,7 +1,10 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from packages.app_meta import read_app_version, read_git_commit
 
 
 def _find_repo_root() -> Path:
@@ -33,7 +36,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "RoadVision"
-    app_version: str = "0.1.0"
+    git_commit: str = Field(default_factory=read_git_commit)
     app_env: str = "development"
     log_level: str = "INFO"
     api_host: str = "0.0.0.0"
@@ -97,6 +100,12 @@ class Settings(BaseSettings):
     display_plate_threshold: float = 0.65
 
     default_source_type: str = "uploaded_video"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def app_version(self) -> str:
+        # Read VERSION file; ignore APP_VERSION from env / production .env.bak.
+        return read_app_version()
 
     @property
     def cors_origins_list(self) -> list[str]:

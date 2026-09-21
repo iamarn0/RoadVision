@@ -40,6 +40,18 @@ async function fetchLive(): Promise<{ status?: string } | null> {
   }
 }
 
+async function fetchAppVersion(): Promise<{ version?: string } | null> {
+  try {
+    const response = await fetch(`${API_BASE}/api/version`, { cache: "no-store" });
+    if (!response.ok) {
+      return null;
+    }
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
@@ -47,6 +59,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     queryKey: ["health-live"],
     queryFn: fetchLive,
     refetchInterval: 15000,
+  });
+  const appVersion = useQuery({
+    queryKey: ["app-version"],
+    queryFn: fetchAppVersion,
   });
 
   const operational = health.data?.status === "ok";
@@ -59,12 +75,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   });
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-[#2a3441] bg-[#121821]">
-        <div className="border-b border-[#2a3441] px-4 py-4">
-          <p className="text-[11px] tracking-[0.18em] text-[#9aa8b5]">ROADVISION</p>
-          <p className="mt-1 text-sm text-[#e8edf2]">ANPR operations</p>
-          <p className="mt-2 text-xs text-[#9aa8b5]">v{process.env.NEXT_PUBLIC_APP_VERSION ?? "0.1.0"}</p>
+    <div className="flex min-h-screen bg-[var(--bg)]">
+      <aside className="flex w-60 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--panel)]">
+        <div className="border-b border-[var(--border)] px-4 py-4">
+          <a href="/" className="text-[11px] tracking-[0.18em] text-[var(--accent)]">
+            ROADVISION
+          </a>
+          <p className="mt-1 text-sm text-[var(--text)]">ANPR operations</p>
+          <p className="mt-2 text-xs text-[var(--muted)]">
+            {appVersion.data?.version ? `v${appVersion.data.version}` : "\u00a0"}
+          </p>
         </div>
         <nav className="flex-1 px-2 py-3" aria-label="Primary">
           {visibleNav.map((item) => {
@@ -75,7 +95,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 key={item.href}
                 href={item.href}
                 className={`mb-1 flex items-center gap-2 rounded-sm px-3 py-2 text-sm ${
-                  active ? "bg-[#1d2836] text-white" : "text-[#c5d0da] hover:bg-[#1a222d]"
+                  active
+                    ? "bg-[var(--accent)] text-white"
+                    : "text-[var(--text)] hover:bg-[var(--hover)]"
                 }`}
                 aria-current={active ? "page" : undefined}
               >
@@ -85,24 +107,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
-        <div className="border-t border-[#2a3441] px-4 py-3 text-sm">
+        <div className="border-t border-[var(--border)] px-4 py-3 text-sm">
           {user ? (
             <div className="mb-3">
-              <p className="truncate text-sm text-[#e8edf2]">{user.display_name}</p>
-              <p className="truncate text-xs text-[#9aa8b5]">
+              <p className="truncate text-sm text-[var(--text)]">{user.display_name}</p>
+              <p className="truncate text-xs text-[var(--muted)]">
                 {roleLabel(user.role)} · {user.email}
               </p>
               <button
                 type="button"
                 onClick={() => void logout()}
-                className="mt-2 flex items-center gap-1 text-xs text-[#9aa8b5] hover:text-white"
+                className="mt-2 flex items-center gap-1 text-xs text-[var(--muted)] hover:text-[var(--accent)]"
               >
                 <LogOut size={12} aria-hidden="true" />
                 Sign out
               </button>
             </div>
           ) : null}
-          <p className="text-xs uppercase tracking-wide text-[#9aa8b5]">System status</p>
+          <p className="text-xs uppercase tracking-wide text-[var(--muted)]">System status</p>
           <p className="mt-1 flex items-center gap-2">
             <span
               className={`inline-block h-2 w-2 rounded-full ${operational ? "bg-[#3d9a6a]" : "bg-[#c9922a]"}`}

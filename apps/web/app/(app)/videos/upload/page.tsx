@@ -96,10 +96,10 @@ export default function UploadPage() {
     <section className="mx-auto max-w-3xl space-y-4">
       <div>
         <h1 className="text-xl font-medium">Upload footage</h1>
-        <p className="mt-1 text-sm text-[#9aa8b5]">
+        <p className="mt-1 text-sm text-[var(--muted)]">
           Submit roadside or CCTV video for vehicle tracking and Indian plate recognition.
         </p>
-        <p className="mt-1 text-sm text-[#9aa8b5]">Supported formats: MP4, AVI, MOV, MKV, WEBM</p>
+        <p className="mt-1 text-sm text-[var(--muted)]">Supported formats: MP4, AVI, MOV, MKV, WEBM</p>
       </div>
 
       <Card>
@@ -108,7 +108,7 @@ export default function UploadPage() {
           tabIndex={0}
           aria-label="Video upload drop zone"
           className={`flex min-h-48 cursor-pointer flex-col items-center justify-center rounded-sm border border-dashed px-4 py-10 text-center ${
-            dragOver ? "border-[#2f9e9e] bg-[#132024]" : "border-[#2a3441] bg-[#121821]"
+            dragOver ? "border-[var(--accent)] bg-[var(--hover)]" : "border-[var(--border)] bg-[var(--panel)]"
           }`}
           onClick={() => inputRef.current?.click()}
           onKeyDown={(e) => {
@@ -127,8 +127,8 @@ export default function UploadPage() {
           }}
         >
           <p className="text-sm font-medium">Drag and drop your video here</p>
-          <p className="mt-2 text-sm text-[#9aa8b5]">or</p>
-          <p className="mt-2 text-sm text-[#2f9e9e]">Browse files</p>
+          <p className="mt-2 text-sm text-[var(--muted)]">or</p>
+          <p className="mt-2 text-sm text-[var(--accent)]">Browse files</p>
           <input
             ref={inputRef}
             type="file"
@@ -142,7 +142,7 @@ export default function UploadPage() {
         </div>
 
         {meta && (
-          <div className="mt-4 grid gap-2 border-t border-[#2a3441] pt-4 text-sm md:grid-cols-2">
+          <div className="mt-4 grid gap-2 border-t border-[var(--border)] pt-4 text-sm md:grid-cols-2">
             <p>Filename: {meta.name}</p>
             <p>File size: {formatBytes(meta.size)}</p>
             <p>Duration: {meta.duration != null ? `${meta.duration.toFixed(1)}s` : "— (server will probe)"}</p>
@@ -160,7 +160,7 @@ export default function UploadPage() {
         {uploaded && (
           <div className="mt-4 rounded-sm border border-[#2a5540] bg-[#132018] p-3 text-sm">
             <p className="font-medium text-[#3d9a6a]">Upload complete</p>
-            <p className="mt-1 text-[#9aa8b5]">
+            <p className="mt-1 text-[var(--muted)]">
               {uploaded.width}×{uploaded.height} · {uploaded.fps?.toFixed?.(1) ?? "—"} FPS · {uploaded.codec ?? "codec unknown"} ·{" "}
               {uploaded.frame_count ?? "—"} frames
             </p>

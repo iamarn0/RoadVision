@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-from app.detection.detector import ModelNotFoundError
+from app.detection.detector import ModelNotFoundError, load_yolo_model
 from app.pipeline.geometry import BoundingBox, Detection
 
 
@@ -19,9 +19,7 @@ class PlateDetector:
         path = Path(model_path)
         if not path.is_file():
             raise ModelNotFoundError("plate_detector.pt", str(path))
-        from ultralytics import YOLO
-
-        self.model = YOLO(str(path))
+        self.model = load_yolo_model(str(path), image_size, device, half and device.startswith("cuda"))
         self.device = device
         self.confidence = confidence
         self.iou = iou

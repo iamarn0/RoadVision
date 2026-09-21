@@ -4,7 +4,7 @@
 
 RoadVision is an operational Automatic Number Plate Recognition platform for **uploaded roadside and CCTV video files**. It detects multiple vehicles, tracks them across frames, reads Indian registration plates, aggregates OCR over time, and stores evidence for review and export.
 
-Version: **v0.1.0**
+Version: see the root `VERSION` file (`MAJOR.MINOR.PATCH`). Releases are documented in [docs/versioning.md](docs/versioning.md).
 
 This repository is a greenfield monorepo. Inference uses real models at runtime. The application does not ship fake plates, fake GPU stats, or dummy `.pt` files.
 
@@ -173,4 +173,5 @@ Roles: `admin` (full access + user management), `operator` (upload/process/expor
 - [API](docs/api.md)
 - [Security](docs/security.md)
 - [Deployment](docs/deployment.md)
+- [Versioning and releases](docs/versioning.md)
 - [Troubleshooting](docs/troubleshooting.md)
