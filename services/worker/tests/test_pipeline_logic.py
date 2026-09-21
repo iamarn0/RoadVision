@@ -193,6 +193,21 @@ def test_day_plate_rejects_blurry_or_tiny_crop() -> None:
     assert ok is True
 
 
+def test_high_resolution_rejects_motion_blur() -> None:
+    import cv2
+    import numpy as np
+    from app.preprocessing.plates import has_plate_evidence
+
+    sharp = np.full((80, 280, 3), 235, dtype=np.uint8)
+    for x in range(16, 260, 22):
+        sharp[12:68, x : x + 6] = 12
+    ok, _, _ = has_plate_evidence(sharp, 280, 80, 0.85, dark=False, frame_width=2500)
+    assert ok is True
+    smeared = cv2.GaussianBlur(sharp, (15, 15), 0)
+    ok, _, _ = has_plate_evidence(smeared, 280, 80, 0.85, dark=False, frame_width=2500)
+    assert ok is False
+
+
 def test_hard_false_positive_rejects_empty_structure() -> None:
     import numpy as np
     from app.preprocessing.plates import is_hard_false_positive
@@ -461,6 +476,18 @@ def test_publish_startup_frame_writes_live_and_raw(tmp_path) -> None:
     assert live.is_file()
     assert raw.is_file()
     assert raw.stat().st_size >= live.stat().st_size
+
+
+def test_playback_strides_slow_a_100fps_clip() -> None:
+    from app.pipeline.runner import _playback_strides, _preview_size
+
+    preview, vehicle, plate, preview_fps = _playback_strides(100)
+    assert preview == 4
+    assert vehicle >= 6
+    assert plate == 2 or plate == 3
+    assert preview_fps == 25
+    assert _playback_strides(25)[0] == 1
+    assert _preview_size(2500, 1400)[0] == 1280
 
 
 def test_public_error_includes_exception_type() -> None:

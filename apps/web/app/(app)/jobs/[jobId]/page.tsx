@@ -159,7 +159,7 @@ export default function JobDetailPage() {
     return () => window.clearInterval(id);
   }, [active, paused, liveReady]);
 
-  // Follow the worker clock. Do not rewind every poll — that is the jump-back loop.
+  // The picture plays on its own clock. Waiting for the worker makes a 100 fps clip stutter.
   useEffect(() => {
     const el = videoRef.current;
     const j = job.data;
@@ -168,22 +168,8 @@ export default function JobDetailPage() {
       if (!el.paused) el.pause();
       return;
     }
-    const fps = j.source_fps && j.source_fps > 0 ? j.source_fps : 25;
-    const target = Math.max(0, (j.current_frame || 0) / fps);
-    const drift = el.currentTime - target;
-    if (drift > 1.5) {
-      if (!el.paused) el.pause();
-      return;
-    }
-    if (drift < -1.5) {
-      try {
-        el.currentTime = target;
-      } catch {
-        /* ignore seek errors while metadata loads */
-      }
-    }
     if (el.paused) void el.play().catch(() => undefined);
-  }, [active, paused, job.data?.current_frame, job.data?.source_fps, job.data?.status]);
+  }, [active, paused, job.data?.status]);
 
   const cancel = useMutation({
     mutationFn: () => apiPost<JobRead>(`/api/jobs/${jobId}/cancel`),
@@ -351,24 +337,18 @@ export default function JobDetailPage() {
             <div className="border-b border-[var(--border)] px-4 py-3">
               <h2 className="text-sm font-medium">Realtime processing</h2>
               <p className="mt-1 text-xs text-[var(--muted)]">
-                Video plays at the original FPS. Pause to inspect a frame, then capture that picture — plates are saved too when found.
+                The video plays smoothly. Pause to inspect a frame, then capture that picture — plates are saved from the sharpest frame.
               </p>
             </div>
             <div className="relative aspect-video bg-black">
-              {liveFrameUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={liveFrameUrl}
-                  alt="Live annotated frame"
-                  className="h-full w-full object-contain"
-                />
-              ) : originalVideo ? (
+              {originalVideo ? (
                 <video
                   ref={videoRef}
                   className="h-full w-full object-contain"
                   src={originalVideo}
                   muted
                   playsInline
+                  autoPlay
                 >
                   <track kind="captions" />
                 </video>
@@ -377,21 +357,18 @@ export default function JobDetailPage() {
                   Waiting for first frame…
                 </div>
               )}
-              {j.status === "validating" && !liveFrameUrl && (
+              {paused && liveFrameUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={liveFrameUrl}
+                  alt="Paused annotated frame"
+                  className="absolute inset-0 h-full w-full object-contain"
+                />
+              )}
+              {j.status === "validating" && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/75 px-6 text-center text-sm text-white">
                   Preparing this video so it can play and process on this system…
                 </div>
-              )}
-              {originalVideo && liveFrameUrl && (
-                <video
-                  ref={videoRef}
-                  className="pointer-events-none absolute h-0 w-0 opacity-0"
-                  src={originalVideo}
-                  muted
-                  playsInline
-                >
-                  <track kind="captions" />
-                </video>
               )}
               {paused && j.status === "processing" && (
                 <div className="absolute left-3 top-3">

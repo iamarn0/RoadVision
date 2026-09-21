@@ -196,7 +196,13 @@ def readable_plate_limits(frame_width: float, dark: bool = False) -> tuple[float
         return min_w, max(8.0, min_w / 5.0), 8.0
     min_w = max(26.0, min(56.0, width * 0.040))
     min_h = max(10.0, min(16.0, min_w / 4.5))
-    min_sharp = 10.0 if width < 1200 else 16.0
+    if width >= 2000:
+        # High-resolution frames make a smeared plate look large. Require real edges.
+        min_sharp = 70.0
+    elif width >= 1200:
+        min_sharp = 16.0
+    else:
+        min_sharp = 10.0
     return min_w, min_h, min_sharp
 
 
@@ -264,12 +270,12 @@ def plate_frame_quality(
     plate_confidence: float,
     contrast: float,
 ) -> float:
-    """Rank a readable plate crop. Sharpness outweighs a larger blurry box."""
+    """Rank a readable plate crop. A sharp plate beats a larger motion-smeared one."""
     return (
-        0.60 * min(1.0, float(sharp) / SHARPNESS_CAP)
-        + 0.25 * min(1.0, float(plate_area) / AREA_CAP)
-        + 0.10 * min(1.0, float(plate_confidence))
-        + 0.05 * min(1.0, float(contrast) / CONTRAST_CAP)
+        0.82 * min(1.0, float(sharp) / SHARPNESS_CAP)
+        + 0.08 * min(1.0, float(plate_area) / AREA_CAP)
+        + 0.07 * min(1.0, float(plate_confidence))
+        + 0.03 * min(1.0, float(contrast) / CONTRAST_CAP)
     )
 
 
@@ -345,6 +351,10 @@ def consider_plate_candidate(
 
     quality = float(candidate["quality"])
     prev_quality = _quality_of(previous)
+    prev_sharp = float(previous.get("sharp") or 0.0)
+    cand_sharp = float(candidate.get("sharp") or 0.0)
+    if cand_sharp >= max(prev_sharp * 1.25, prev_sharp + 40.0):
+        quality = max(quality, prev_quality + 0.01)
     alts = list(previous.get("alternates") or [])
     if quality > prev_quality:
         alts.append(_quality_snapshot(previous, owned=True))

@@ -176,7 +176,25 @@ def _publish_startup_frame(video_path: Path, live_frame_path: Path, live_raw_pat
         cap.release()
 
 
-def _write_live_frames(live_frame_path: Path, live_raw_path: Path, overlay: Any, raw_image: Any) -> bytes | None:
+def _preview_size(width: int, height: int, max_width: int = 1280) -> tuple[int, int]:
+    if width <= max_width:
+        return max(2, width // 2 * 2), max(2, height // 2 * 2)
+    scale = max_width / float(width)
+    return max(2, int(width * scale) // 2 * 2), max(2, int(height * scale) // 2 * 2)
+
+
+def _playback_strides(source_fps: float) -> tuple[int, int, int, float]:
+    """How often to detect, read plates, and refresh the picture.
+
+    A 100 fps file does not need 100 detections or 100 preview frames per second.
+    Plates are still checked often enough to keep the sharp frame.
+    """
+    fps = max(float(source_fps or 25.0), 1.0)
+    preview_stride = max(1, int(round(fps / min(fps, 25.0))))
+    vehicle_stride = max(1, int(round(fps / min(fps, 15.0))))
+    plate_stride = max(1, int(round(fps / min(fps, 40.0))))
+    preview_fps = fps / preview_stride
+    return preview_stride, vehicle_stride, plate_stride, preview_fps
     ok, encoded = cv2.imencode(".jpg", overlay, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
     jpeg = encoded.tobytes() if ok else None
     if jpeg:
@@ -575,8 +593,15 @@ def process_job(db: Session, job_id: UUID) -> None:
             raise PipelineError("VIDEO_INVALID", "Video resolution is invalid.")
         source_fps = float(meta.fps or video.fps or 25.0)
         frame_duration = 1.0 / max(source_fps, 1.0)
+        preview_stride, vehicle_stride, plate_stride, preview_fps = _playback_strides(source_fps)
+        if frame_skip:
+            vehicle_stride = max(vehicle_stride, frame_skip + 1)
         job.total_frames = meta.frame_count or job.total_frames
-        renderer = AnnotatedVideoRenderer(annotated_path, source_fps, (meta.width, meta.height))
+        renderer = AnnotatedVideoRenderer(
+            annotated_path,
+            preview_fps,
+            _preview_size(meta.width, meta.height),
+        )
 
         for frame in source.frames():
             if _cancelled(str(job.id)):
@@ -613,60 +638,36 @@ def process_job(db: Session, job_id: UUID) -> None:
             target_wall = playback_origin + video_ts
             now = time.perf_counter()
             behind = now > target_wall + frame_duration
-            force_infer = frame.index - last_infer_index >= 5
-            all_published = bool(best_by_track) and all(c.get("published") for c in best_by_track.values())
-            visible_published = bool(last_vehicles) and all(
-                _vehicle_is_published(v.track_id, best_by_track) for v in last_vehicles
-            )
-            cheap_behind = behind and not force_infer and visible_published and all_published
-            if cheap_behind:
+            show_preview = frame.index % preview_stride == 0
+            detect_vehicles = frame.index % vehicle_stride == 0 or not last_vehicles
+            detect_plates = frame.index % plate_stride == 0
+            if not show_preview and not detect_vehicles and not detect_plates:
                 skipped += 1
-                shown = draw_overlay(
-                    frame.image,
-                    last_vehicles,
-                    [],
-                    {tid: {"plate_confidence": cap["plate_confidence"]} for tid, cap in best_by_track.items()},
-                    video_ts,
-                )
-                last_overlay = shown
-                renderer.write(shown)
                 job.current_frame = frame.index
                 job.skipped_frames = skipped
-                if source_fps and meta.frame_count:
+                if source_fps and meta.frame_count and frame.index % 15 == 0:
                     job.estimated_remaining_seconds = max(0.0, (meta.frame_count - frame.index - 1) / source_fps)
                     job.progress = min(99.0, 100.0 * (frame.index + 1) / meta.frame_count)
-                if skipped % 2 == 0:
-                    _write_live_frames(live_frame_path, live_raw_path, shown, frame.image)
-                if skipped % 10 == 0:
                     db.commit()
                 continue
             if not behind:
                 delay = target_wall - now
                 if delay > 0:
-                    time.sleep(min(delay, frame_duration * 2))
-
-            if frame_skip and frame.index % (frame_skip + 1) != 0:
-                skipped += 1
-                shown = draw_overlay(
-                    frame.image,
-                    last_vehicles,
-                    [],
-                    {tid: {"plate_confidence": cap["plate_confidence"]} for tid, cap in best_by_track.items()},
-                    video_ts,
-                )
-                renderer.write(shown)
-                continue
+                    time.sleep(min(delay, 1.0 / 25.0))
 
             t0 = time.perf_counter()
-            last_infer_index = frame.index
-            try:
-                vehicles = tracker.update(frame.image, frame.index, frame.timestamp)
-                last_vehicles = vehicles
-            except RuntimeError as exc:
-                if "out of memory" in str(exc).lower():
-                    _handle_oom(db, job, settings)
-                    return
-                raise
+            if detect_vehicles:
+                last_infer_index = frame.index
+                try:
+                    vehicles = tracker.update(frame.image, frame.index, frame.timestamp)
+                    last_vehicles = vehicles
+                except RuntimeError as exc:
+                    if "out of memory" in str(exc).lower():
+                        _handle_oom(db, job, settings)
+                        return
+                    raise
+            else:
+                vehicles = last_vehicles
 
             for v in vehicles:
                 info = vehicle_meta.setdefault(
@@ -685,108 +686,109 @@ def process_job(db: Session, job_id: UUID) -> None:
 
             plates: list = []
             associated: list = []
-            luminance = frame_luminance(frame.image)
-            dark = luminance < ROI_ENHANCE_LUMINANCE_MAX
-            detect_conf = min(float(plate_detector.confidence), 0.22) if dark else None
-            associated = search_plates_in_vehicles(
-                frame.image,
-                vehicles,
-                plate_detector,
-                frame.index,
-                frame.timestamp,
-                confidence=detect_conf,
-            )
-            if not associated and vehicles and frame.index - last_full_plate_frame >= 8:
-                detect_image = enhance_low_light_frame(frame.image) if dark else frame.image
-                plates = plate_detector.detect(
-                    detect_image,
+            frame_crops: list[dict[str, Any]] = []
+            accepted_associated: list = []
+            if detect_plates and vehicles:
+                luminance = frame_luminance(frame.image)
+                dark = luminance < ROI_ENHANCE_LUMINANCE_MAX
+                detect_conf = min(float(plate_detector.confidence), 0.22) if dark else None
+                associated = search_plates_in_vehicles(
+                    frame.image,
+                    vehicles,
+                    plate_detector,
                     frame.index,
                     frame.timestamp,
                     confidence=detect_conf,
                 )
-                plates = drop_caption_plates(frame.image, plates)
-                fallback = associate_plates(vehicles, plates)
-                taken = {item[0].track_id for item in associated}
-                associated.extend(pair for pair in fallback if pair[0].track_id not in taken)
-                last_full_plate_frame = frame.index
-
-            frame_crops: list[dict[str, Any]] = []
-            accepted_associated: list = []
-            for vehicle, plate in associated:
-                x1, y1, x2, y2 = plate.bounding_box.clip(meta.width, meta.height).as_int()
-                vx1, vy1, vx2, vy2 = vehicle.detection.bounding_box.clip(meta.width, meta.height).as_int()
-                plate_img = crop_box(frame.image, x1, y1, x2, y2, pad=0.08)
-                pad_l, pad_t, pad_r, pad_b = vehicle_capture_pads(vehicle.detection.class_name)
-                vehicle_img, _, _ = crop_box_asymmetric(frame.image, vx1, vy1, vx2, vy2, pad_l, pad_t, pad_r, pad_b)
-                if plate_img.size == 0:
-                    continue
-                ok, _gate_score, sharp = has_plate_evidence(
-                    plate_img,
-                    float(x2 - x1),
-                    float(y2 - y1),
-                    plate.confidence,
-                    dark=dark,
-                    frame_width=float(meta.width or 0),
-                )
-                if not ok:
-                    continue
-                plate_pad = PLATE_CROP_PAD_NIGHT if dark else PLATE_CROP_PAD_DAY
-                saved_plate = crop_box(frame.image, x1, y1, x2, y2, pad=plate_pad)
-                if saved_plate.size == 0:
-                    saved_plate = plate_img
-                accepted_associated.append((vehicle, plate))
-                observation = {
-                    "frame_number": frame.index,
-                    "timestamp": frame.timestamp,
-                    "plate_confidence": plate.confidence,
-                    "bounding_box": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-                }
-                vehicle_box = {"x1": vx1, "y1": vy1, "x2": vx2, "y2": vy2}
-                capture_id = vehicle.track_id
-                previous = best_by_track.get(vehicle.track_id)
-                if previous is None:
-                    merged_id = find_same_passage(
-                        best_by_track,
+                if not associated and vehicles and frame.index - last_full_plate_frame >= 8:
+                    detect_image = enhance_low_light_frame(frame.image) if dark else frame.image
+                    plates = plate_detector.detect(
+                        detect_image,
+                        frame.index,
                         frame.timestamp,
-                        vehicle_box,
-                        saved_plate,
-                        exclude_track_id=vehicle.track_id,
+                        confidence=detect_conf,
                     )
-                    if merged_id is not None:
-                        capture_id = merged_id
-                        previous = best_by_track[merged_id]
-                frame_crops.append(
-                    {
-                        "track_id": capture_id,
-                        "image_plate": saved_plate.copy(),
-                        "image_vehicle": vehicle_img.copy() if vehicle_img.size else None,
-                    }
-                )
-                plate_area = float(max(1, x2 - x1) * max(1, y2 - y1))
-                _s, contrast, _m, _e, _c = plate_structure_metrics(plate_img)
-                quality = plate_frame_quality(sharp, plate_area, plate.confidence, contrast)
-                best_by_track[capture_id] = consider_plate_candidate(
-                    previous,
-                    {
-                        "quality": quality,
-                        "sharp": sharp,
-                        "plate_area": plate_area,
-                        "contrast": contrast,
-                        "best_frame": frame.index,
+                    plates = drop_caption_plates(frame.image, plates)
+                    fallback = associate_plates(vehicles, plates)
+                    taken = {item[0].track_id for item in associated}
+                    associated.extend(pair for pair in fallback if pair[0].track_id not in taken)
+                    last_full_plate_frame = frame.index
+
+                for vehicle, plate in associated:
+                    x1, y1, x2, y2 = plate.bounding_box.clip(meta.width, meta.height).as_int()
+                    vx1, vy1, vx2, vy2 = vehicle.detection.bounding_box.clip(meta.width, meta.height).as_int()
+                    plate_img = crop_box(frame.image, x1, y1, x2, y2, pad=0.08)
+                    pad_l, pad_t, pad_r, pad_b = vehicle_capture_pads(vehicle.detection.class_name)
+                    vehicle_img, _, _ = crop_box_asymmetric(frame.image, vx1, vy1, vx2, vy2, pad_l, pad_t, pad_r, pad_b)
+                    if plate_img.size == 0:
+                        continue
+                    ok, _gate_score, sharp = has_plate_evidence(
+                        plate_img,
+                        float(x2 - x1),
+                        float(y2 - y1),
+                        plate.confidence,
+                        dark=dark,
+                        frame_width=float(meta.width or 0),
+                    )
+                    if not ok:
+                        continue
+                    plate_pad = PLATE_CROP_PAD_NIGHT if dark else PLATE_CROP_PAD_DAY
+                    saved_plate = crop_box(frame.image, x1, y1, x2, y2, pad=plate_pad)
+                    if saved_plate.size == 0:
+                        saved_plate = plate_img
+                    accepted_associated.append((vehicle, plate))
+                    observation = {
+                        "frame_number": frame.index,
                         "timestamp": frame.timestamp,
                         "plate_confidence": plate.confidence,
-                        "vehicle_confidence": vehicle.detection.confidence,
-                        "vehicle_type": vehicle.detection.class_name,
-                        "plate_box": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-                        "vehicle_box": vehicle_box,
-                        "image_full": frame.image,
-                        "image_vehicle": vehicle_img,
-                        "image_plate": saved_plate,
-                        "observation": observation,
-                        "source_ids": {vehicle.track_id, capture_id},
-                        "active_tid": vehicle.track_id,
-                    },
-                )
+                        "bounding_box": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+                    }
+                    vehicle_box = {"x1": vx1, "y1": vy1, "x2": vx2, "y2": vy2}
+                    capture_id = vehicle.track_id
+                    previous = best_by_track.get(vehicle.track_id)
+                    if previous is None:
+                        merged_id = find_same_passage(
+                            best_by_track,
+                            frame.timestamp,
+                            vehicle_box,
+                            saved_plate,
+                            exclude_track_id=vehicle.track_id,
+                        )
+                        if merged_id is not None:
+                            capture_id = merged_id
+                            previous = best_by_track[merged_id]
+                    frame_crops.append(
+                        {
+                            "track_id": capture_id,
+                            "image_plate": saved_plate.copy(),
+                            "image_vehicle": vehicle_img.copy() if vehicle_img.size else None,
+                        }
+                    )
+                    plate_area = float(max(1, x2 - x1) * max(1, y2 - y1))
+                    _s, contrast, _m, _e, _c = plate_structure_metrics(plate_img)
+                    quality = plate_frame_quality(sharp, plate_area, plate.confidence, contrast)
+                    best_by_track[capture_id] = consider_plate_candidate(
+                        previous,
+                        {
+                            "quality": quality,
+                            "sharp": sharp,
+                            "plate_area": plate_area,
+                            "contrast": contrast,
+                            "best_frame": frame.index,
+                            "timestamp": frame.timestamp,
+                            "plate_confidence": plate.confidence,
+                            "vehicle_confidence": vehicle.detection.confidence,
+                            "vehicle_type": vehicle.detection.class_name,
+                            "plate_box": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+                            "vehicle_box": vehicle_box,
+                            "image_full": frame.image,
+                            "image_vehicle": vehicle_img,
+                            "image_plate": saved_plate,
+                            "observation": observation,
+                            "source_ids": {vehicle.track_id, capture_id},
+                            "active_tid": vehicle.track_id,
+                        },
+                    )
 
             published_now = _publish_due_captures(
                 captures_dir,
@@ -816,35 +818,36 @@ def process_job(db: Session, job_id: UUID) -> None:
             _handle_manual_capture(str(job.id), captures_dir, last_manual_targets)
 
             inference_times.append(time.perf_counter() - t0)
-            overlay = draw_overlay(
-                frame.image,
-                vehicles,
-                associated,
-                {tid: {"plate_confidence": cap["plate_confidence"]} for tid, cap in best_by_track.items()},
-                frame.timestamp,
-            )
-            last_overlay = overlay
-            renderer.write(overlay)
-
-            jpeg = None
-            if processed == 0 or frame.index % 2 == 0:
-                jpeg = _write_live_frames(live_frame_path, live_raw_path, overlay, frame.image)
-            if jpeg:
-                _publish_preview(
-                    job.id,
-                    jpeg,
-                    {
-                        "job_id": str(job.id),
-                        "status": "processing",
-                        "current_frame": frame.index,
-                        "total_frames": meta.frame_count or 0,
-                        "timestamp_seconds": frame.timestamp,
-                        "source_fps": source_fps,
-                        "vehicles_detected": len(vehicle_meta),
-                        "plates_captured": sum(1 for cap in best_by_track.values() if cap.get("published")),
-                        "progress": min(99.0, 100.0 * (frame.index + 1) / meta.frame_count) if meta.frame_count else 0,
-                    },
+            if show_preview:
+                overlay = draw_overlay(
+                    frame.image,
+                    vehicles,
+                    associated,
+                    {tid: {"plate_confidence": cap["plate_confidence"]} for tid, cap in best_by_track.items()},
+                    frame.timestamp,
                 )
+                last_overlay = overlay
+                preview_w, preview_h = _preview_size(meta.width, meta.height)
+                if overlay.shape[1] != preview_w or overlay.shape[0] != preview_h:
+                    overlay = cv2.resize(overlay, (preview_w, preview_h), interpolation=cv2.INTER_AREA)
+                renderer.write(overlay)
+                jpeg = _write_live_frames(live_frame_path, live_raw_path, overlay, frame.image)
+                if jpeg:
+                    _publish_preview(
+                        job.id,
+                        jpeg,
+                        {
+                            "job_id": str(job.id),
+                            "status": "processing",
+                            "current_frame": frame.index,
+                            "total_frames": meta.frame_count or 0,
+                            "timestamp_seconds": frame.timestamp,
+                            "source_fps": source_fps,
+                            "vehicles_detected": len(vehicle_meta),
+                            "plates_captured": sum(1 for cap in best_by_track.values() if cap.get("published")),
+                            "progress": min(99.0, 100.0 * (frame.index + 1) / meta.frame_count) if meta.frame_count else 0,
+                        },
+                    )
 
             processed += 1
             elapsed = time.perf_counter() - start - paused_total
