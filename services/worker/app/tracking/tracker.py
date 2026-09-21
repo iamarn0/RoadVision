@@ -1,8 +1,11 @@
+import logging
 from dataclasses import dataclass
 
 import numpy as np
 
 from app.pipeline.geometry import Detection
+
+logger = logging.getLogger("worker")
 
 
 @dataclass
@@ -65,7 +68,7 @@ class VehicleTracker:
                 self._previous = tracked
                 return tracked
             except Exception:
-                pass
+                logger.exception("ByteTrack update failed; falling back to IoU association")
         detections = self.detector.detect(image, frame_number, timestamp)
         return self._iou_associate(detections)
 

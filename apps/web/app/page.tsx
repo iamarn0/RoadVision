@@ -1,4 +1,4 @@
-/** Marketing homepage is served from public/home/index.html via middleware rewrite. */
+/** Marketing site is served from public/home/*.html via middleware rewrite. */
 export default function HomePage() {
   return null;
 }

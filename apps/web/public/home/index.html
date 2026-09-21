@@ -33,77 +33,8 @@
 </head>
 
 <body>
-    <!-- Spinner Start -->
-    <div id="spinner" class="show bg-white position-fixed translate-middle w-100 vh-100 top-50 start-50 d-flex align-items-center justify-content-center">
-        <div class="spinner-border text-primary" style="width: 3rem; height: 3rem;" role="status">
-            <span class="sr-only">Loading...</span>
-        </div>
-    </div>
-    <!-- Spinner End -->
-
-
-    <!-- Topbar Start -->
-    <div class="container-fluid bg-dark px-5">
-        <div class="row gx-4 d-none d-lg-flex">
-            <div class="col-lg-6 text-start">
-                <div class="h-100 d-inline-flex align-items-center py-3 me-4">
-                    <div class="btn-sm-square rounded-circle bg-primary me-2">
-                        <small class="fa fa-map-marker-alt text-white"></small>
-                    </div>
-                    <small>Kolkata, West Bengal</small>
-                </div>
-                <div class="h-100 d-inline-flex align-items-center py-3">
-                    <div class="btn-sm-square rounded-circle bg-primary me-2">
-                        <small class="fa fa-envelope-open text-white"></small>
-                    </div>
-                    <small>info@roadvision.tech</small>
-                </div>
-            </div>
-            <div class="col-lg-6 text-end">
-                <div class="h-100 d-inline-flex align-items-center py-3 me-4">
-                    <div class="btn-sm-square rounded-circle bg-primary me-2">
-                        <small class="fa fa-phone-alt text-white"></small>
-                    </div>
-                    <small>+91 9831933297</small>
-                </div>
-                <div class="h-100 d-inline-flex align-items-center py-3">
-                    <div class="btn-sm-square rounded-circle bg-primary me-2">
-                        <small class="far fa-clock text-white"></small>
-                    </div>
-                    <small>Mon - Fri : 9AM - 9PM</small>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- Topbar End -->
-
-
-    <!-- Navbar Start -->
-    <nav class="navbar navbar-expand-lg bg-white navbar-light sticky-top p-0 px-4 px-lg-5">
-        <a href="/" class="navbar-brand d-flex align-items-center">
-            <h2 class="m-0 text-primary">RoadVision</h2>
-        </a>
-        <button type="button" class="navbar-toggler" data-bs-toggle="collapse" data-bs-target="#navbarCollapse">
-            <span class="navbar-toggler-icon"></span>
-        </button>
-        <div class="collapse navbar-collapse" id="navbarCollapse">
-            <div class="navbar-nav ms-auto py-4 py-lg-0">
-                <a href="#home" class="nav-item nav-link active">Home</a>
-                <a href="#about" class="nav-item nav-link">About</a>
-                <a href="#service" class="nav-item nav-link">Service</a>
-                <a href="#project" class="nav-item nav-link">Project</a>
-                <a href="#contact" class="nav-item nav-link">Contact</a>
-                <a href="/login" class="nav-item nav-link">Sign in</a>
-            </div>
-            <div class="h-100 d-lg-inline-flex align-items-center d-none">
-                <a class="btn btn-square rounded-circle bg-light text-primary me-2" href=""><i class="fab fa-facebook-f"></i></a>
-                <a class="btn btn-square rounded-circle bg-light text-primary me-2" href=""><i class="fab fa-twitter"></i></a>
-                <a class="btn btn-square rounded-circle bg-light text-primary me-2" href=""><i class="fab fa-linkedin-in"></i></a>
-                <a class="btn btn-square rounded-circle bg-light text-primary me-0" href=""><i class="fab fa-instagram"></i></a>
-            </div>
-        </div>
-    </nav>
-    <!-- Navbar End -->
+    <script src="/js/site-shell.js"></script>
+    <script>RV.writeChrome("home");</script>
 
 
     <!-- Carousel Start -->
@@ -117,7 +48,6 @@
                             <div class="col-12 col-lg-8 text-center">
                                 <h1 class="display-3 text-white animated slideInDown mb-4">AI Vision for Safer, Smarter Roads</h1>
                                 <p class="fs-5 text-white mb-4 pb-2">RoadVision turns CCTV, dashcam, and IP camera feeds into live traffic, safety, and pavement intelligence — without new hardware.</p>
-                                <a href="#about" class="btn btn-primary rounded-pill py-md-3 px-md-5 me-3 animated slideInLeft">Read More</a>
                                 <a href="/login" class="btn btn-light rounded-pill py-md-3 px-md-5 animated slideInRight">Open Console</a>
                             </div>
                         </div>
@@ -132,7 +62,6 @@
                             <div class="col-12 col-lg-8 text-center">
                                 <h1 class="display-3 text-white animated slideInDown mb-4">Traffic Intelligence for Cities & Highways</h1>
                                 <p class="fs-5 text-white mb-4 pb-2">Count vehicles, classify 2W/3W/cars/buses/trucks, and map congestion from the cameras you already operate.</p>
-                                <a href="#service" class="btn btn-primary rounded-pill py-md-3 px-md-5 me-3 animated slideInLeft">Read More</a>
                                 <a href="/login" class="btn btn-light rounded-pill py-md-3 px-md-5 animated slideInRight">Open Console</a>
                             </div>
                         </div>
@@ -147,7 +76,6 @@
                             <div class="col-12 col-lg-8 text-center">
                                 <h1 class="display-3 text-white animated slideInDown mb-4">From Camera Feeds to Actionable Road Data</h1>
                                 <p class="fs-5 fw-medium text-white mb-4 pb-2">Detect potholes, signs, and incidents in real time. Export geotagged reports for planning, maintenance, and enforcement.</p>
-                                <a href="#project" class="btn btn-primary rounded-pill py-md-3 px-md-5 me-3 animated slideInLeft">Read More</a>
                                 <a href="/login" class="btn btn-light rounded-pill py-md-3 px-md-5 animated slideInRight">Open Console</a>
                             </div>
                         </div>
@@ -163,7 +91,7 @@
     <div class="container-xxl py-5">
         <div class="container">
             <div class="row g-4">
-                <div class="col-md-6 col-lg-4 wow fadeIn" data-wow-delay="0.1s">
+                <div class="col-md-6 col-lg-3 wow fadeIn" data-wow-delay="0.1s">
                     <div class="h-100 bg-dark p-4 p-xl-5">
                         <div class="d-flex align-items-center justify-content-between mb-4">
                             <div class="btn-square rounded-circle" style="width: 64px; height: 64px; background: #000000;">
@@ -176,7 +104,7 @@
                         <span>Live flow, occupancy, and vehicle class from existing CCTV so planners can act on today&rsquo;s congestion, not last month&rsquo;s survey.</span>
                     </div>
                 </div>
-                <div class="col-md-6 col-lg-4 wow fadeIn" data-wow-delay="0.3s">
+                <div class="col-md-6 col-lg-3 wow fadeIn" data-wow-delay="0.3s">
                     <div class="h-100 bg-dark p-4 p-xl-5">
                         <div class="d-flex align-items-center justify-content-between mb-4">
                             <div class="btn-square rounded-circle" style="width: 64px; height: 64px; background: #000000;">
@@ -189,7 +117,7 @@
                         <span>Read plates, track direction, and support tolling, parking, and corridor access with evidence-grade snapshots from ONVIF cameras.</span>
                     </div>
                 </div>
-                <div class="col-md-6 col-lg-4 wow fadeIn" data-wow-delay="0.5s">
+                <div class="col-md-6 col-lg-3 wow fadeIn" data-wow-delay="0.5s">
                     <div class="h-100 bg-dark p-4 p-xl-5">
                         <div class="d-flex align-items-center justify-content-between mb-4">
                             <div class="btn-square rounded-circle" style="width: 64px; height: 64px; background: #000000;">
@@ -200,6 +128,19 @@
                         <h5 class="text-white">24/7 Monitoring</h5>
                         <hr class="w-25">
                         <span>Always-on incident, safety, and pavement alerts so highway and city teams respond before a small defect becomes a closure.</span>
+                    </div>
+                </div>
+                <div class="col-md-6 col-lg-3 wow fadeIn" data-wow-delay="0.7s">
+                    <div class="h-100 bg-dark p-4 p-xl-5">
+                        <div class="d-flex align-items-center justify-content-between mb-4">
+                            <div class="btn-square rounded-circle" style="width: 64px; height: 64px; background: #000000;">
+                                <img class="img-fluid" src="/img/icon/icon-7.png" alt="Icon">
+                            </div>
+                            <h1 class="display-1 mb-0" style="color: #000000;">04</h1>
+                        </div>
+                        <h5 class="text-white">24/7 Customer Support</h5>
+                        <hr class="w-25">
+                        <span>Round-the-clock help for camera setup, live jobs, and console issues so your operators are never stuck waiting for the next business day.</span>
                     </div>
                 </div>
             </div>
@@ -220,8 +161,9 @@
                 <div class="col-lg-6 about-text py-5 wow fadeIn" data-wow-delay="0.5s">
                     <div class="p-lg-5 pe-lg-0">
                         <div class="bg-primary mb-3" style="width: 60px; height: 2px;"></div>
-                        <h1 class="display-5 mb-4">About RoadVision</h1>
-                        <p class="mb-4 pb-2">We build computer vision for Indian roads. RoadVision connects to the cameras cities, contractors, and fleets already use, then turns video into counts, plate reads, distress maps, and maintenance-ready reports.</p>
+                        <h1 class="display-5 mb-4">About Us</h1>
+                        <p class="mb-3">At Unikorn, we don&rsquo;t just watch over your business&mdash;we make your infrastructure intelligent. We are a forward-thinking technology partner specializing in high-performance CCTV, cutting-edge Automatic Number Plate Recognition (ANPR) solutions, and robust networking infrastructure.</p>
+                        <p class="mb-4 pb-2">Behind Unikorn is a powerhouse team of highly skilled, certified engineers who bring deep technical expertise and professional precision to every project. We understand that modern security demands absolute reliability, which is why our specialists bridge the gap between advanced hardware and sophisticated network intelligence. From complex network architecture to seamless ANPR integration, we design, deploy, and manage turnkey surveillance systems that empower your operations with real-time clarity and data-driven insights. With us, you aren&rsquo;t just installing cameras; you are partnering with elite technical minds dedicated to engineering unyielding security for your enterprise.</p>
                         <div class="row g-4 mb-4 pb-3">
                             <div class="col-sm-6 wow fadeIn" data-wow-delay="0.1s">
                                 <div class="d-flex align-items-center">
@@ -246,7 +188,8 @@
                                 </div>
                             </div>
                         </div>
-                        <a href="#service" class="btn btn-primary rounded-pill py-3 px-5">Explore More</a>
+                        <a href="/about" class="btn btn-primary rounded-pill py-3 px-5 me-3">About us</a>
+                        <a href="/contact" class="btn btn-outline-primary rounded-pill py-3 px-5">Contact</a>
                     </div>
                 </div>
             </div>
@@ -270,7 +213,7 @@
                         </div>
                         <h4 class="mb-3">Traffic Analysis</h4>
                         <p class="mb-4">Lane-wise counts, speed, and mix of vehicles from live CCTV for planning and operations.</p>
-                        <a class="btn" href="#contact"><i class="fa fa-arrow-right text-white me-3"></i>Read More</a>
+                        <a class="btn" href="/services/traffic-analysis"><i class="fa fa-arrow-right text-white me-3"></i>Read More</a>
                     </div>
                 </div>
                 <div class="col-md-6 col-lg-3 wow fadeIn" data-wow-delay="0.3s">
@@ -280,7 +223,7 @@
                         </div>
                         <h4 class="mb-3">ANPR Recognition</h4>
                         <p class="mb-4">Detect and read license plates for tolling, parking, and enforcement with local processing.</p>
-                        <a class="btn" href="#contact"><i class="fa fa-arrow-right text-white me-3"></i>Read More</a>
+                        <a class="btn" href="/services/anpr-recognition"><i class="fa fa-arrow-right text-white me-3"></i>Read More</a>
                     </div>
                 </div>
                 <div class="col-md-6 col-lg-3 wow fadeIn" data-wow-delay="0.5s">
@@ -290,7 +233,7 @@
                         </div>
                         <h4 class="mb-3">Road Condition AI</h4>
                         <p class="mb-4">Flag potholes, cracks, and faded markings from dashcam or patrol video, geotagged for crews.</p>
-                        <a class="btn" href="#contact"><i class="fa fa-arrow-right text-white me-3"></i>Read More</a>
+                        <a class="btn" href="/services/road-condition-ai"><i class="fa fa-arrow-right text-white me-3"></i>Read More</a>
                     </div>
                 </div>
                 <div class="col-md-6 col-lg-3 wow fadeIn" data-wow-delay="0.7s">
@@ -300,9 +243,12 @@
                         </div>
                         <h4 class="mb-3">Highway CCTV Intel</h4>
                         <p class="mb-4">Incident, wrong-way, and asset alerts on the IP cameras already lining your corridor.</p>
-                        <a class="btn" href="#contact"><i class="fa fa-arrow-right text-white me-3"></i>Read More</a>
+                        <a class="btn" href="/services/highway-cctv-intel"><i class="fa fa-arrow-right text-white me-3"></i>Read More</a>
                     </div>
                 </div>
+            </div>
+            <div class="text-center mt-5">
+                <a class="btn btn-primary rounded-pill py-3 px-5" href="/services">View all services</a>
             </div>
         </div>
     </div>
@@ -405,8 +351,8 @@
                             <p class="text-primary mb-2">Highway Corridor</p>
                             <h5 class="lh-base mb-3">Live CCTV intelligence for a multi-lane expressway stretch</h5>
                             <div class="d-flex justify-content-center">
-                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/img/portfolio-1.jpg" data-lightbox="portfolio"><i class="fa fa-eye"></i></a>
-                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="#contact"><i class="fa fa-link"></i></a>
+                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/img/portfolio-1.jpg" data-lightbox="portfolio" aria-label="View photo"><i class="fa fa-eye"></i></a>
+                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/projects/highway-corridor" aria-label="Open project"><i class="fa fa-link"></i></a>
                             </div>
                         </div>
                     </div>
@@ -422,8 +368,8 @@
                             <p class="text-primary mb-2">Pavement Survey</p>
                             <h5 class="lh-base mb-3">Dashcam-based pothole and crack mapping for city roads</h5>
                             <div class="d-flex justify-content-center">
-                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/img/portfolio-2.jpg" data-lightbox="portfolio"><i class="fa fa-eye"></i></a>
-                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="#contact"><i class="fa fa-link"></i></a>
+                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/img/portfolio-2.jpg" data-lightbox="portfolio" aria-label="View photo"><i class="fa fa-eye"></i></a>
+                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/projects/pavement-survey" aria-label="Open project"><i class="fa fa-link"></i></a>
                             </div>
                         </div>
                     </div>
@@ -439,8 +385,8 @@
                             <p class="text-primary mb-2">ANPR Gate</p>
                             <h5 class="lh-base mb-3">Plate recognition for parking and restricted-access zones</h5>
                             <div class="d-flex justify-content-center">
-                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/img/portfolio-3.jpg" data-lightbox="portfolio"><i class="fa fa-eye"></i></a>
-                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="#contact"><i class="fa fa-link"></i></a>
+                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/img/portfolio-3.jpg" data-lightbox="portfolio" aria-label="View photo"><i class="fa fa-eye"></i></a>
+                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/projects/anpr-gate" aria-label="Open project"><i class="fa fa-link"></i></a>
                             </div>
                         </div>
                     </div>
@@ -456,8 +402,8 @@
                             <p class="text-primary mb-2">Incident Alerts</p>
                             <h5 class="lh-base mb-3">Stopped-vehicle and wrong-way detection on urban flyovers</h5>
                             <div class="d-flex justify-content-center">
-                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/img/portfolio-4.jpg" data-lightbox="portfolio"><i class="fa fa-eye"></i></a>
-                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="#contact"><i class="fa fa-link"></i></a>
+                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/img/portfolio-4.jpg" data-lightbox="portfolio" aria-label="View photo"><i class="fa fa-eye"></i></a>
+                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/projects/incident-alerts" aria-label="Open project"><i class="fa fa-link"></i></a>
                             </div>
                         </div>
                     </div>
@@ -473,8 +419,8 @@
                             <p class="text-primary mb-2">City Traffic</p>
                             <h5 class="lh-base mb-3">Junction counts and classification for signal planning</h5>
                             <div class="d-flex justify-content-center">
-                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/img/portfolio-5.jpg" data-lightbox="portfolio"><i class="fa fa-eye"></i></a>
-                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="#contact"><i class="fa fa-link"></i></a>
+                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/img/portfolio-5.jpg" data-lightbox="portfolio" aria-label="View photo"><i class="fa fa-eye"></i></a>
+                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/projects/city-traffic" aria-label="Open project"><i class="fa fa-link"></i></a>
                             </div>
                         </div>
                     </div>
@@ -490,63 +436,19 @@
                             <p class="text-primary mb-2">Fleet Dashcam</p>
                             <h5 class="lh-base mb-3">Every patrol drive becomes a mapped road-condition survey</h5>
                             <div class="d-flex justify-content-center">
-                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/img/portfolio-6.jpg" data-lightbox="portfolio"><i class="fa fa-eye"></i></a>
-                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="#contact"><i class="fa fa-link"></i></a>
+                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/img/portfolio-6.jpg" data-lightbox="portfolio" aria-label="View photo"><i class="fa fa-eye"></i></a>
+                                <a class="btn btn-square btn-primary rounded-circle mx-1" href="/projects/fleet-dashcam" aria-label="Open project"><i class="fa fa-link"></i></a>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
-    <!-- Projects End -->
-
-
-    <!-- Quote Start -->
-    <div class="container-fluid bg-light my-5 px-lg-0" id="contact">
-        <div class="container quote px-lg-0">
-            <div class="row g-0 mx-lg-0 align-items-stretch">
-                <div class="col-lg-6 quote-img ps-lg-0">
-                    <img class="img-fluid w-100 h-100" src="/img/quote.jpg" alt="">
-                </div>
-                <div class="col-lg-6 quote-text py-5">
-                    <div class="p-lg-5 px-4 pe-lg-0">
-                        <div class="bg-primary mb-3" style="width: 60px; height: 2px;"></div>
-                        <h1 class="display-5 mb-5">Free Quote</h1>
-                        <p class="mb-4 pb-2">Tell us about your corridor, camera network, or fleet. We will recommend a RoadVision pilot using the feeds you already have.</p>
-                        <form>
-                            <div class="row g-3">
-                                <div class="col-12 col-sm-6">
-                                    <input type="text" class="form-control border-0" placeholder="Your Name" style="height: 55px;">
-                                </div>
-                                <div class="col-12 col-sm-6">
-                                    <input type="email" class="form-control border-0" placeholder="Your Email" style="height: 55px;">
-                                </div>
-                                <div class="col-12 col-sm-6">
-                                    <input type="text" class="form-control border-0" placeholder="Your Mobile" style="height: 55px;">
-                                </div>
-                                <div class="col-12 col-sm-6">
-                                    <select class="form-select border-0" style="height: 55px;">
-                                        <option selected>Select A Service</option>
-                                        <option value="1">Traffic Analysis</option>
-                                        <option value="2">ANPR Recognition</option>
-                                        <option value="3">Road Condition AI</option>
-                                    </select>
-                                </div>
-                                <div class="col-12">
-                                    <textarea class="form-control border-0" placeholder="Special Note"></textarea>
-                                </div>
-                                <div class="col-12">
-                                    <button class="btn btn-primary w-100 py-3" type="submit">Get A Free Quote</button>
-                                </div>
-                            </div>
-                        </form>
-                    </div>
-                </div>
+            <div class="text-center mt-5">
+                <a class="btn btn-primary rounded-pill py-3 px-5" href="/projects">View all projects</a>
             </div>
         </div>
     </div>
-    <!-- Quote End -->
+    <!-- Projects End -->
 
 
     <!-- Team Start -->
@@ -660,67 +562,7 @@
     <!-- Testimonial End -->
 
 
-    <!-- Footer Start -->
-    <div class="container-fluid bg-dark text-secondary footer mt-5 py-5 wow fadeIn" data-wow-delay="0.1s">
-        <div class="container py-5">
-            <div class="row g-5">
-                <div class="col-lg-3 col-md-6">
-                    <h5 class="text-light mb-4">Address</h5>
-                    <p class="mb-2"><i class="fa fa-map-marker-alt me-3"></i>Kolkata, West Bengal, India</p>
-                    <p class="mb-2"><i class="fa fa-phone-alt me-3"></i>+91 9831933297</p>
-                    <p class="mb-2"><i class="fa fa-envelope me-3"></i>info@roadvision.tech</p>
-                    <div class="d-flex pt-2">
-                        <a class="btn btn-square btn-outline-secondary rounded-circle me-2" href=""><i class="fab fa-twitter"></i></a>
-                        <a class="btn btn-square btn-outline-secondary rounded-circle me-2" href=""><i class="fab fa-facebook-f"></i></a>
-                        <a class="btn btn-square btn-outline-secondary rounded-circle me-2" href=""><i class="fab fa-youtube"></i></a>
-                        <a class="btn btn-square btn-outline-secondary rounded-circle me-2" href=""><i class="fab fa-linkedin-in"></i></a>
-                    </div>
-                </div>
-                <div class="col-lg-3 col-md-6">
-                    <h5 class="text-light mb-4">Services</h5>
-                    <a class="btn btn-link" href="#service">Traffic Analysis</a>
-                    <a class="btn btn-link" href="#service">ANPR Recognition</a>
-                    <a class="btn btn-link" href="#service">Road Condition AI</a>
-                    <a class="btn btn-link" href="#service">Highway CCTV Intel</a>
-                    <a class="btn btn-link" href="#service">Fleet Dashcam Survey</a>
-                </div>
-                <div class="col-lg-3 col-md-6">
-                    <h5 class="text-light mb-4">Quick Links</h5>
-                    <a class="btn btn-link" href="#about">About Us</a>
-                    <a class="btn btn-link" href="#contact">Contact Us</a>
-                    <a class="btn btn-link" href="#service">Our Services</a>
-                    <a class="btn btn-link" href="#project">Our Projects</a>
-                    <a class="btn btn-link" href="#contact">Support</a>
-                </div>
-                <div class="col-lg-3 col-md-6">
-                    <h5 class="text-light mb-4">Newsletter</h5>
-                    <p>Get RoadVision updates on traffic AI, ANPR, and road condition monitoring.</p>
-                    <div class="position-relative w-100">
-                        <input class="form-control bg-transparent border-secondary w-100 py-3 ps-4 pe-5" type="text" placeholder="Your email">
-                        <button type="button" class="btn btn-primary py-2 position-absolute top-0 end-0 mt-2 me-2">SignUp</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- Footer End -->
-
-
-    <!-- Copyright Start -->
-    <div class="container-fluid py-4" style="background: #000000;">
-        <div class="container">
-            <div class="row">
-                <div class="col-md-12 text-center text-md-start mb-3 mb-md-0">
-                    &copy; <a class="border-bottom" href="#">RoadVision</a>, All Right Reserved.
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- Copyright End -->
-
-
-    <!-- Back to Top -->
-    <a href="#" class="btn btn-lg btn-primary btn-lg-square rounded-circle back-to-top"><i class="bi bi-arrow-up"></i></a>
+    <script>RV.writeFooter();</script>
 
 
     <!-- JavaScript Libraries -->

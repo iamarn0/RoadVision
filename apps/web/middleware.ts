@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { SESSION_COOKIE } from "@/lib/auth";
+import { resolveMarketingFile } from "@/lib/marketing";
 
-const PUBLIC_PATHS = ["/login", "/", "/home"];
+const PUBLIC_PATHS = ["/login", "/", "/home", "/about", "/services", "/projects", "/contact", "/api/contact"];
 
 const PUBLIC_PREFIXES = ["/css/", "/js/", "/lib/", "/img/", "/home/"];
 
@@ -18,9 +19,10 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (pathname === "/" || pathname === "") {
+  const marketingFile = resolveMarketingFile(pathname);
+  if (marketingFile) {
     const url = request.nextUrl.clone();
-    url.pathname = "/home/index.html";
+    url.pathname = marketingFile;
     return NextResponse.rewrite(url);
   }
 

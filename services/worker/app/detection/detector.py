@@ -79,12 +79,23 @@ class VehicleDetector:
         self.reset_tracking()
 
     def reset_tracking(self) -> None:
-        """Clear ByteTrack state so a cached model does not leak IDs across jobs."""
+        """Clear ByteTrack state so a cached model does not leak IDs across jobs.
+
+        Ultralytics `model.track(persist=True)` skips tracker init whenever
+        `predictor.trackers` exists — even if it is an empty list. Emptying the
+        list therefore crashes the next job with IndexError on trackers[0].
+        """
         predictor = getattr(self.model, "predictor", None)
         if predictor is None:
             return
-        if hasattr(predictor, "trackers"):
-            predictor.trackers = []
+        trackers = getattr(predictor, "trackers", None)
+        if trackers:
+            for tracker in trackers:
+                reset = getattr(tracker, "reset", None)
+                if callable(reset):
+                    reset()
+        elif hasattr(predictor, "trackers"):
+            delattr(predictor, "trackers")
         vid_path = getattr(predictor, "vid_path", None)
         if isinstance(vid_path, list):
             predictor.vid_path = [None] * len(vid_path)
