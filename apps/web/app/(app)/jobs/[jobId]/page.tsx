@@ -260,7 +260,13 @@ export default function JobDetailPage() {
   });
 
   const annotated = useMemo(() => mediaUrl(job.data?.annotated_asset_id), [job.data?.annotated_asset_id]);
-  const originalVideo = useMemo(() => mediaUrl(job.data?.original_asset_id), [job.data?.original_asset_id]);
+  const originalVideo = useMemo(() => {
+    const url = mediaUrl(job.data?.original_asset_id);
+    if (!url) return null;
+    // Reload after validation so the player picks up the converted H.264 file.
+    if (job.data?.status === "validating" || job.data?.status === "queued") return url;
+    return `${url}?playable=1`;
+  }, [job.data?.original_asset_id, job.data?.status]);
   const liveFrameUrl = useMemo(() => {
     if (paused && heldFrameUrlRef.current) return heldFrameUrlRef.current;
     if (!liveReady) return null;
@@ -367,8 +373,13 @@ export default function JobDetailPage() {
                   <track kind="captions" />
                 </video>
               ) : (
-                <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
+                <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--muted)]">
                   Waiting for first frame…
+                </div>
+              )}
+              {j.status === "validating" && !liveFrameUrl && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/75 px-6 text-center text-sm text-white">
+                  Preparing this video so it can play and process on this system…
                 </div>
               )}
               {originalVideo && liveFrameUrl && (

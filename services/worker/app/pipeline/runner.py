@@ -46,6 +46,7 @@ from app.tracking.tracker import VehicleTracker
 from packages.db.enums import AssetType, ConfidenceStatus, JobStatus
 from packages.db.models import MediaAsset, Observation, PlateDetection, ProcessingJob, VehicleTrack, Video
 from packages.device.probe import DeviceError, select_device
+from packages.video_normalize import PlayableVideo, ensure_playable_mp4
 
 logger = logging.getLogger("worker")
 
@@ -366,6 +367,52 @@ def _plate_status(conf: float, high: float, medium: float, low: float) -> str:
     return ConfidenceStatus.UNCERTAIN.value
 
 
+def _storage_file(storage_root: Path, storage_key: str) -> Path:
+    rel = storage_key.replace("\\", "/").lstrip("/")
+    return storage_root / rel
+
+
+def _apply_playable_video(db: Session, video: Video, storage_root: Path, prepared: PlayableVideo) -> Path:
+    if prepared.replaced_path is None:
+        return prepared.path
+    rel = prepared.path.resolve().relative_to(storage_root.resolve()).as_posix()
+    old_key = video.storage_key
+    video.storage_key = rel
+    video.mime_type = "video/mp4"
+    video.codec = prepared.codec or "h264"
+    video.file_size = prepared.path.stat().st_size
+    if prepared.width:
+        video.width = prepared.width
+    if prepared.height:
+        video.height = prepared.height
+    if prepared.fps:
+        video.fps = prepared.fps
+    if prepared.frame_count:
+        video.frame_count = prepared.frame_count
+    if prepared.duration:
+        video.duration = prepared.duration
+    for asset in video.assets:
+        if asset.storage_key == old_key or asset.asset_type == AssetType.ORIGINAL_VIDEO.value:
+            asset.storage_key = rel
+            asset.mime_type = "video/mp4"
+            asset.file_size = video.file_size
+            asset.checksum = None
+    db.commit()
+    try:
+        prepared.replaced_path.unlink(missing_ok=True)
+    except OSError:
+        logger.warning("could not remove original upload %s", prepared.replaced_path)
+    return prepared.path
+
+
+def _prepare_uploaded_video(db: Session, video: Video, storage_root: Path) -> Path:
+    src = _storage_file(storage_root, video.storage_key)
+    if not src.is_file():
+        raise PipelineError("STORAGE_ERROR", f"Original video is missing: {video.storage_key}")
+    prepared = ensure_playable_mp4(src)
+    return _apply_playable_video(db, video, storage_root, prepared)
+
+
 def process_job(db: Session, job_id: UUID) -> None:
     settings = get_settings()
     job = db.get(ProcessingJob, job_id)
@@ -386,16 +433,24 @@ def process_job(db: Session, job_id: UUID) -> None:
     if overrides.get("frame_skip") is not None:
         frame_skip = max(0, int(overrides.get("frame_skip")))
 
-    job.status = JobStatus.PROCESSING.value
+    job.status = JobStatus.VALIDATING.value
     job.started_at = datetime.now(UTC)
     job.ocr_engine = "disabled"
     db.commit()
 
     storage_root = settings.storage_root_path
-    video_path = storage_root / video.storage_key
-    if not video_path.exists():
-        _fail(db, job, "STORAGE_ERROR", f"Original video is missing: {video.storage_key}")
+    try:
+        video_path = _prepare_uploaded_video(db, video, storage_root)
+    except PipelineError as exc:
+        _fail(db, job, exc.error_code, exc.message)
         return
+    except Exception as exc:
+        logger.exception("video prepare failed")
+        _fail(db, job, "VIDEO_INVALID", _public_error(exc))
+        return
+
+    job.status = JobStatus.PROCESSING.value
+    db.commit()
 
     live_dir = storage_root / "processed" / str(job.id)
     captures_dir = live_dir / "captures"
