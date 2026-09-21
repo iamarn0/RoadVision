@@ -478,12 +478,19 @@ def test_publish_startup_frame_writes_live_and_raw(tmp_path) -> None:
     assert raw.stat().st_size >= live.stat().st_size
 
 
-def test_playback_strides_slow_a_100fps_clip() -> None:
+def test_two_wheelers_map_to_motorcycle() -> None:
+    from app.detection.detector import VEHICLE_CLASS_MAP
+
+    for name in ("motorcycle", "motorbike", "bike", "bicycle", "scooter", "moped"):
+        assert VEHICLE_CLASS_MAP[name] == "motorcycle"
+
+
+def test_playback_strides_keep_bikes_trackable() -> None:
     from app.pipeline.runner import _playback_strides, _preview_size
 
     preview, vehicle, plate, preview_fps = _playback_strides(100)
     assert preview == 4
-    assert vehicle >= 6
+    assert vehicle == 2
     assert plate == 2 or plate == 3
     assert preview_fps == 25
     assert _playback_strides(25)[0] == 1

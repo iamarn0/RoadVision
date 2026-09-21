@@ -191,7 +191,8 @@ def _playback_strides(source_fps: float) -> tuple[int, int, int, float]:
     """
     fps = max(float(source_fps or 25.0), 1.0)
     preview_stride = max(1, int(round(fps / min(fps, 25.0))))
-    vehicle_stride = max(1, int(round(fps / min(fps, 15.0))))
+    # Keep vehicle updates close together. A wider gap drops small, fast bikes.
+    vehicle_stride = min(2, max(1, int(round(fps / min(fps, 15.0)))))
     plate_stride = max(1, int(round(fps / min(fps, 40.0))))
     preview_fps = fps / preview_stride
     return preview_stride, vehicle_stride, plate_stride, preview_fps

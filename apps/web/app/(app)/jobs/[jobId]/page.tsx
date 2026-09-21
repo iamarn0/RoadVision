@@ -126,6 +126,8 @@ export default function JobDetailPage() {
   const [previewCap, setPreviewCap] = useState<LiveCaptureItem | null>(null);
   const heldFrameUrlRef = useRef<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const framePaceRef = useRef<{ frame: number; at: number } | null>(null);
+  const resumeAtRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
 
   const job = useQuery({
@@ -159,17 +161,85 @@ export default function JobDetailPage() {
     return () => window.clearInterval(id);
   }, [active, paused, liveReady]);
 
-  // The picture plays on its own clock. Waiting for the worker makes a 100 fps clip stutter.
+  // Stay on the frame being processed. A 100 fps file must not race ahead and then jump back.
   useEffect(() => {
     const el = videoRef.current;
     const j = job.data;
     if (!el || !j || !active) return;
+    const fps = j.source_fps && j.source_fps > 0 ? j.source_fps : 25;
+    const frame = j.current_frame || 0;
+    const target = Math.max(0, frame / fps);
     if (paused || j.status !== "processing") {
+      el.playbackRate = 1;
+      framePaceRef.current = null;
+      if (paused && target > 0.05) {
+        resumeAtRef.current = Math.max(resumeAtRef.current || 0, target);
+        if (Math.abs(el.currentTime - target) > 0.2) {
+          try {
+            el.currentTime = target;
+          } catch {
+            /* metadata may still be loading */
+          }
+        }
+      }
       if (!el.paused) el.pause();
       return;
     }
+    const resumeAt = resumeAtRef.current;
+    if (resumeAt != null && resumeAt > 0.05) {
+      resumeAtRef.current = null;
+      framePaceRef.current = { frame, at: performance.now() };
+      const continueAt = Math.max(resumeAt, target);
+      const startPlayback = () => {
+        if (videoRef.current?.paused) void videoRef.current.play().catch(() => undefined);
+      };
+      if (Math.abs(el.currentTime - continueAt) > 0.15) {
+        const onSeeked = () => {
+          el.removeEventListener("seeked", onSeeked);
+          startPlayback();
+        };
+        el.addEventListener("seeked", onSeeked);
+        try {
+          el.currentTime = continueAt;
+        } catch {
+          el.removeEventListener("seeked", onSeeked);
+          startPlayback();
+        }
+      } else {
+        startPlayback();
+      }
+      return;
+    }
+    if (frame < 2) {
+      el.playbackRate = 1;
+      if (!el.paused) el.pause();
+      return;
+    }
+    const now = performance.now();
+    const prev = framePaceRef.current;
+    let rate = 1;
+    if (prev && frame > prev.frame) {
+      const framesPerSec = (frame - prev.frame) / Math.max(0.05, (now - prev.at) / 1000);
+      rate = Math.min(1, Math.max(0.25, framesPerSec / fps));
+    }
+    framePaceRef.current = { frame, at: now };
+    const drift = el.currentTime - target;
+    // Rewinding to the processed frame repeats the same picture. Wait in place instead.
+    if (drift > 0.45) {
+      el.playbackRate = 1;
+      if (!el.paused) el.pause();
+      return;
+    }
+    el.playbackRate = drift > 0.12 ? Math.min(rate, 0.5) : rate;
+    if (drift < -1) {
+      try {
+        el.currentTime = target;
+      } catch {
+        /* ignore seek errors while metadata loads */
+      }
+    }
     if (el.paused) void el.play().catch(() => undefined);
-  }, [active, paused, job.data?.status]);
+  }, [active, paused, job.data?.current_frame, job.data?.source_fps, job.data?.status]);
 
   const cancel = useMutation({
     mutationFn: () => apiPost<JobRead>(`/api/jobs/${jobId}/cancel`),
@@ -179,6 +249,22 @@ export default function JobDetailPage() {
     mutationFn: () => apiPost<JobRead>(`/api/jobs/${jobId}/pause`),
     onMutate: () => {
       setControlError(null);
+      const fps = job.data?.source_fps && job.data.source_fps > 0 ? job.data.source_fps : 25;
+      const el = videoRef.current;
+      const fromVideo = el?.currentTime || 0;
+      const fromJob = Math.max(0, (job.data?.current_frame || 0) / fps);
+      const at = Math.max(fromVideo, fromJob);
+      resumeAtRef.current = at;
+      if (el) {
+        el.pause();
+        if (at > 0.05) {
+          try {
+            el.currentTime = at;
+          } catch {
+            /* metadata may still be loading */
+          }
+        }
+      }
       heldFrameUrlRef.current = `${API_BASE}/api/jobs/${jobId}/live-frame?t=${job.data?.current_frame ?? 0}-${liveTick}`;
       setPreviewPaused(true);
     },
@@ -246,13 +332,7 @@ export default function JobDetailPage() {
   });
 
   const annotated = useMemo(() => mediaUrl(job.data?.annotated_asset_id), [job.data?.annotated_asset_id]);
-  const originalVideo = useMemo(() => {
-    const url = mediaUrl(job.data?.original_asset_id);
-    if (!url) return null;
-    // Reload after validation so the player picks up the converted H.264 file.
-    if (job.data?.status === "validating" || job.data?.status === "queued") return url;
-    return `${url}?playable=1`;
-  }, [job.data?.original_asset_id, job.data?.status]);
+  const originalVideo = useMemo(() => mediaUrl(job.data?.original_asset_id), [job.data?.original_asset_id]);
   const liveFrameUrl = useMemo(() => {
     if (paused && heldFrameUrlRef.current) return heldFrameUrlRef.current;
     if (!liveReady) return null;
@@ -337,18 +417,21 @@ export default function JobDetailPage() {
             <div className="border-b border-[var(--border)] px-4 py-3">
               <h2 className="text-sm font-medium">Realtime processing</h2>
               <p className="mt-1 text-xs text-[var(--muted)]">
-                The video plays smoothly. Pause to inspect a frame, then capture that picture — plates are saved from the sharpest frame.
+                Playback stays on the frame being processed. Pause to inspect a frame, then capture that picture.
               </p>
             </div>
             <div className="relative aspect-video bg-black">
               {originalVideo ? (
                 <video
                   ref={videoRef}
-                  className="h-full w-full object-contain"
+                  className={
+                    liveFrameUrl
+                      ? "pointer-events-none absolute h-0 w-0 opacity-0"
+                      : "h-full w-full object-contain"
+                  }
                   src={originalVideo}
                   muted
                   playsInline
-                  autoPlay
                 >
                   <track kind="captions" />
                 </video>
@@ -357,12 +440,12 @@ export default function JobDetailPage() {
                   Waiting for first frame…
                 </div>
               )}
-              {paused && liveFrameUrl && (
+              {liveFrameUrl && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={liveFrameUrl}
-                  alt="Paused annotated frame"
-                  className="absolute inset-0 h-full w-full object-contain"
+                  alt="Live annotated frame"
+                  className="h-full w-full object-contain"
                 />
               )}
               {j.status === "validating" && (
