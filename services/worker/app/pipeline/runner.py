@@ -195,6 +195,9 @@ def _playback_strides(source_fps: float) -> tuple[int, int, int, float]:
     plate_stride = max(1, int(round(fps / min(fps, 40.0))))
     preview_fps = fps / preview_stride
     return preview_stride, vehicle_stride, plate_stride, preview_fps
+
+
+def _write_live_frames(live_frame_path: Path, live_raw_path: Path, overlay: Any, raw_image: Any) -> bytes | None:
     ok, encoded = cv2.imencode(".jpg", overlay, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
     jpeg = encoded.tobytes() if ok else None
     if jpeg:
