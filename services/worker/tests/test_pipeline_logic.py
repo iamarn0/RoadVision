@@ -381,3 +381,23 @@ def test_publish_startup_frame_writes_live_and_raw(tmp_path) -> None:
     assert live.is_file()
     assert raw.is_file()
     assert raw.stat().st_size >= live.stat().st_size
+
+
+def test_public_error_includes_exception_type() -> None:
+    from app.pipeline.runner import _public_error
+
+    message = _public_error(ValueError("Unable to open video"))
+    assert message.startswith("ValueError:")
+    assert "Unable to open video" in message
+
+
+def test_annotated_writer_accepts_odd_frame_size(tmp_path) -> None:
+    import numpy as np
+    from app.rendering.annotate import AnnotatedVideoRenderer
+
+    path = tmp_path / "out.mp4"
+    renderer = AnnotatedVideoRenderer(path, 8.0, (63, 47))
+    renderer.write(np.full((47, 63, 3), 40, dtype=np.uint8))
+    renderer.close()
+    assert path.is_file()
+    assert path.stat().st_size > 0

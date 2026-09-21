@@ -56,6 +56,13 @@ class PipelineError(Exception):
         super().__init__(message)
 
 
+def _public_error(exc: BaseException) -> str:
+    text = str(exc).strip() or exc.__class__.__name__
+    if len(text) > 800:
+        text = text[:800] + "…"
+    return f"{exc.__class__.__name__}: {text}"
+
+
 def _control_client():
     import redis
 
@@ -439,7 +446,8 @@ def process_job(db: Session, job_id: UUID) -> None:
 
     overlay_clock: dict[str, Any] | None = None
     overlay_applied = False
-    overlay_thread, overlay_holder = _start_overlay_clock(video_path)
+    overlay_thread: threading.Thread | None = None
+    overlay_holder: dict[str, Any] = {"clock": None, "done": True}
     best_by_track: dict[int, dict[str, Any]] = {}
     vehicle_meta: dict[int, dict[str, Any]] = {}
 
@@ -489,9 +497,10 @@ def process_job(db: Session, job_id: UUID) -> None:
         )
         return
     except Exception as exc:
-        _fail(db, job, "PROCESSING_FAILED", str(exc))
+        _fail(db, job, "PROCESSING_FAILED", _public_error(exc))
         return
 
+    overlay_thread, overlay_holder = _start_overlay_clock(video_path)
     tracker = VehicleTracker(vehicle_detector)
 
     source = UploadedFileSource(video_path, source_id=str(video.id))
@@ -518,7 +527,14 @@ def process_job(db: Session, job_id: UUID) -> None:
     index_flushed = False
 
     try:
-        meta = source.open()
+        try:
+            meta = source.open()
+        except FileNotFoundError:
+            raise PipelineError("STORAGE_ERROR", f"Original video is missing: {video.storage_key}") from None
+        except Exception as exc:
+            raise PipelineError("VIDEO_INVALID", f"Could not open uploaded video: {exc}") from exc
+        if meta.width < 2 or meta.height < 2:
+            raise PipelineError("VIDEO_INVALID", "Video resolution is invalid.")
         source_fps = float(meta.fps or video.fps or 25.0)
         frame_duration = 1.0 / max(source_fps, 1.0)
         job.total_frames = meta.frame_count or job.total_frames
@@ -834,7 +850,7 @@ def process_job(db: Session, job_id: UUID) -> None:
                 pass
 
         job.status = JobStatus.FINALIZING.value
-        if not overlay_holder.get("done"):
+        if overlay_thread is not None and not overlay_holder.get("done"):
             overlay_thread.join(timeout=8.0)
         _maybe_apply_overlay_clock()
         _publish_all_pending(captures_dir, best_by_track, overlay_clock)
@@ -872,15 +888,23 @@ def process_job(db: Session, job_id: UUID) -> None:
         db.commit()
     except PipelineError as exc:
         _fail(db, job, exc.error_code, exc.message)
+    except MemoryError:
+        logger.exception("processing failed: out of memory")
+        _fail(
+            db,
+            job,
+            "PROCESSING_FAILED",
+            "The worker ran out of memory while processing. Retry with the Performance profile or a shorter clip.",
+        )
     except RuntimeError as exc:
         if "out of memory" in str(exc).lower():
             _handle_oom(db, job, settings)
         else:
             logger.exception("processing failed")
-            _fail(db, job, "PROCESSING_FAILED", "Processing failed. See worker logs for details.")
-    except Exception:
+            _fail(db, job, "PROCESSING_FAILED", _public_error(exc))
+    except Exception as exc:
         logger.exception("processing failed")
-        _fail(db, job, "PROCESSING_FAILED", "Processing failed. See worker logs for details.")
+        _fail(db, job, "PROCESSING_FAILED", _public_error(exc))
     finally:
         source.close()
         if renderer:

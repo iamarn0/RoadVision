@@ -6,7 +6,7 @@ Install CUDA PyTorch before ultralytics when using a GPU:
 
 Match the wheel to nvidia-smi. This machine reports an RTX 3050 Laptop GPU.
 
-Windows Celery:
+Always use the solo pool (Windows and Linux Docker). Prefork after OpenCV/PyTorch import fails jobs in production:
 
   celery -A app.worker:celery_app worker --loglevel=INFO --concurrency=1 --pool=solo
 """

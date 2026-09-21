@@ -1,7 +1,14 @@
 FROM python:3.11-slim
 
 WORKDIR /app
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app PIP_DEFAULT_TIMEOUT=180
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    PIP_DEFAULT_TIMEOUT=180 \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -24,4 +31,4 @@ COPY VERSION ./VERSION
 COPY packages ./packages
 COPY services/worker/app ./app
 
-CMD ["celery", "-A", "app.worker:celery_app", "worker", "--loglevel=INFO", "--concurrency=1"]
+CMD ["celery", "-A", "app.worker:celery_app", "worker", "--loglevel=INFO", "--pool=solo", "--concurrency=1"]

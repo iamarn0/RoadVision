@@ -6,7 +6,6 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.core_logging import setup_logging
 from app.db import get_session
-from app.pipeline.runner import process_job
 from packages.db.enums import JobStatus
 from packages.db.models import ProcessingJob
 
@@ -24,7 +23,9 @@ celery_app.conf.update(
     accept_content=["json"],
     result_serializer="json",
     worker_prefetch_multiplier=1,
-    worker_concurrency=settings.max_workers,
+    # solo avoids Linux prefork after OpenCV/NumPy import (breaks production jobs).
+    worker_pool="solo",
+    worker_concurrency=1,
     task_acks_late=True,
     beat_schedule={
         "recover-stale-jobs": {
@@ -43,6 +44,8 @@ def ping() -> dict[str, str]:
 @celery_app.task(name="worker.process_video")
 def process_video(job_id: str) -> dict[str, str]:
     from uuid import UUID
+
+    from app.pipeline.runner import process_job
 
     db = get_session()
     try:

@@ -70,12 +70,28 @@ def draw_overlay(
 class AnnotatedVideoRenderer:
     def __init__(self, path: Path, fps: float, size: tuple[int, int]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        width = max(2, int(size[0]) // 2 * 2)
+        height = max(2, int(size[1]) // 2 * 2)
         self.path = path
-        self._writer = cv2.VideoWriter(str(path), fourcc, max(fps, 1.0), size)
+        self._size = (width, height)
+        self._writer = None
+        for codec in ("mp4v", "XVID", "MJPG"):
+            writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*codec), max(float(fps), 1.0), self._size)
+            if writer.isOpened():
+                self._writer = writer
+                break
+            writer.release()
+        if self._writer is None:
+            raise RuntimeError(f"Could not open annotated video writer for {path}")
 
     def write(self, frame: np.ndarray) -> None:
+        if self._writer is None:
+            return
+        if frame.shape[1] != self._size[0] or frame.shape[0] != self._size[1]:
+            frame = cv2.resize(frame, self._size)
         self._writer.write(frame)
 
     def close(self) -> None:
-        self._writer.release()
+        if self._writer is not None:
+            self._writer.release()
+            self._writer = None

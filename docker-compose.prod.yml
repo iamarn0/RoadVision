@@ -81,6 +81,8 @@ services:
       OCR_DEVICE: cpu
       USE_HALF_PRECISION: "false"
       AUTO_FALLBACK_TO_CPU: "true"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
     volumes:
       - ./storage:/app/storage
       - ./models:/models:ro
