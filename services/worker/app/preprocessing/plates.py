@@ -130,14 +130,38 @@ def evidence_score(
     )
 
 
+def is_burned_in_caption(image: np.ndarray) -> bool:
+    """Yellow glyphs on a dark bar: the camera name burned into the frame, not a plate.
+
+    A yellow commercial plate is the opposite pattern (yellow fill, dark letters), so a
+    high yellow share or a bright median keeps it.
+    """
+    import cv2
+
+    if image.size == 0 or image.ndim != 3 or image.shape[0] < 6 or image.shape[1] < 12:
+        return False
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hue, sat, val = cv2.split(hsv)
+    yellow = (hue >= 15) & (hue <= 42) & (sat >= 90) & (val >= 150)
+    yellow_ratio = float(yellow.mean())
+    if yellow_ratio < 0.02 or yellow_ratio > 0.40:
+        return False
+    if float(np.median(val)) > 80:
+        return False
+    row_yellow = yellow.mean(axis=1)
+    return float(row_yellow.max()) >= 0.08
+
+
 def is_hard_false_positive(
     image: np.ndarray,
     box_width: float,
     box_height: float,
     plate_confidence: float,
 ) -> bool:
-    """Obvious non-plates: empty, extreme aspect, headlights, no letter-like structure."""
+    """Obvious non-plates: empty, extreme aspect, headlights, camera captions, no letter-like structure."""
     if image.size == 0:
+        return True
+    if is_burned_in_caption(image):
         return True
     if plate_confidence < 0.15:
         return True
@@ -158,20 +182,41 @@ def is_hard_false_positive(
     return False
 
 
+def readable_plate_limits(frame_width: float, dark: bool = False) -> tuple[float, float, float]:
+    """Minimum width, height, and sharpness that can exist in this picture.
+
+    704x576 and 848x478 clips, including WhatsApp compressions, do not contain an
+    80px-wide plate until a vehicle is on top of the camera. Scale the bar with the
+    frame and keep the sharpness floor low enough that compression does not wipe
+    every crop.
+    """
+    width = float(frame_width) if frame_width and frame_width > 0 else 1280.0
+    if dark:
+        min_w = max(16.0, min(40.0, width * 0.025))
+        return min_w, max(8.0, min_w / 5.0), 8.0
+    min_w = max(26.0, min(56.0, width * 0.040))
+    min_h = max(10.0, min(16.0, min_w / 4.5))
+    min_sharp = 10.0 if width < 1200 else 16.0
+    return min_w, min_h, min_sharp
+
+
 def has_plate_evidence(
     image: np.ndarray,
     box_width: float,
     box_height: float,
     plate_confidence: float,
     dark: bool = False,
+    frame_width: float = 0.0,
 ) -> tuple[bool, float, float]:
     """Keep a crop only when it has enough plate information. Does not force a save to raise counts."""
     if is_hard_false_positive(image, box_width, box_height, plate_confidence):
         return False, 0.0, 0.0
     sharp, contrast, _mean, edge_density, components = plate_structure_metrics(image)
+    min_w, min_h, min_sharp = readable_plate_limits(frame_width, dark)
+    if box_width < min_w or box_height < min_h or sharp < min_sharp:
+        return False, 0.0, sharp
     min_edge = 0.022 if dark else 0.03
     min_contrast = 10.0 if dark else 14.0
-    min_sharp = 8.0 if dark else 12.0
     structured = components >= 2 or (
         components >= 1 and (box_width / max(box_height, 1.0)) >= 1.8 and contrast >= min_contrast
     )
@@ -207,29 +252,108 @@ def is_plausible_plate_crop(
     return True, sharp, contrast
 
 
-def is_better_evidence(
-    previous: dict[str, Any] | None,
-    score: float,
-    plate_area: float,
-    sharp: float,
-) -> bool:
-    """Replace only when the new crop is larger and still readable, or clearly sharper.
+SHARPNESS_CAP = 400.0
+AREA_CAP = 20000.0
+CONTRAST_CAP = 40.0
+MAX_RUNNERS_UP = 2
 
-    A larger motion-blurred plate must not beat a slightly smaller sharp one.
-    """
+
+def plate_frame_quality(
+    sharp: float,
+    plate_area: float,
+    plate_confidence: float,
+    contrast: float,
+) -> float:
+    """Rank a readable plate crop. Sharpness outweighs a larger blurry box."""
+    return (
+        0.60 * min(1.0, float(sharp) / SHARPNESS_CAP)
+        + 0.25 * min(1.0, float(plate_area) / AREA_CAP)
+        + 0.10 * min(1.0, float(plate_confidence))
+        + 0.05 * min(1.0, float(contrast) / CONTRAST_CAP)
+    )
+
+
+def _quality_of(item: dict[str, Any]) -> float:
+    return float(item.get("quality") or item.get("score") or 0.0)
+
+
+def _winner_fields(candidate: dict[str, Any]) -> dict[str, Any]:
+    quality = float(candidate["quality"])
+    full = candidate.get("image_full")
+    if full is not None and hasattr(full, "copy") and not candidate.get("images_owned"):
+        full = full.copy()
+    return {
+        "quality": quality,
+        "score": quality,
+        "sharp": candidate.get("sharp"),
+        "plate_area": candidate.get("plate_area"),
+        "contrast": candidate.get("contrast"),
+        "best_frame": candidate.get("best_frame"),
+        "plate_confidence": candidate.get("plate_confidence"),
+        "vehicle_confidence": candidate.get("vehicle_confidence"),
+        "vehicle_type": candidate.get("vehicle_type"),
+        "plate_box": candidate.get("plate_box"),
+        "vehicle_box": candidate.get("vehicle_box"),
+        "image_full": full,
+        "image_vehicle": candidate.get("image_vehicle"),
+        "image_plate": candidate.get("image_plate"),
+    }
+
+
+def _quality_snapshot(item: dict[str, Any], *, owned: bool) -> dict[str, Any]:
+    return _winner_fields({**item, "quality": _quality_of(item), "images_owned": owned})
+
+
+def _trim_alternates(alternates: list[dict[str, Any]], winner_quality: float) -> list[dict[str, Any]]:
+    ranked = [alt for alt in alternates if _quality_of(alt) < winner_quality]
+    ranked.sort(key=_quality_of, reverse=True)
+    return ranked[:MAX_RUNNERS_UP]
+
+
+def consider_plate_candidate(
+    previous: dict[str, Any] | None,
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep last_seen and observations on every crop. Replace images only on a higher quality score."""
+    observation = candidate["observation"]
+    timestamp = candidate["timestamp"]
+    source_ids = set(candidate.get("source_ids") or [])
+    active_tid = candidate.get("active_tid")
+
     if previous is None:
-        return True
-    prev_score = float(previous.get("score") or 0.0)
-    prev_area = float(previous.get("plate_area") or 0.0)
-    prev_sharp = float(previous.get("sharp") or 0.0)
-    readable = sharp >= prev_sharp * 0.90
-    if plate_area > prev_area * 1.05 and readable:
-        return True
-    if sharp > prev_sharp * 1.25 and plate_area >= prev_area * 0.85:
-        return True
-    if score > prev_score * 1.02 and readable:
-        return True
-    return False
+        capture = _winner_fields(candidate)
+        capture.update(
+            {
+                "first_seen": timestamp,
+                "last_seen": timestamp,
+                "observations": [observation],
+                "published": False,
+                "source_ids": source_ids,
+                "active_tid": active_tid,
+                "alternates": [],
+            }
+        )
+        return capture
+
+    previous["last_seen"] = timestamp
+    previous.setdefault("observations", []).append(observation)
+    ids = set(previous.get("source_ids") or [])
+    ids.update(source_ids)
+    previous["source_ids"] = ids
+    if active_tid is not None:
+        previous["active_tid"] = active_tid
+
+    quality = float(candidate["quality"])
+    prev_quality = _quality_of(previous)
+    alts = list(previous.get("alternates") or [])
+    if quality > prev_quality:
+        alts.append(_quality_snapshot(previous, owned=True))
+        previous.update(_winner_fields(candidate))
+        previous["alternates"] = _trim_alternates(alts, quality)
+    else:
+        alts.append(_quality_snapshot(candidate, owned=False))
+        previous["alternates"] = _trim_alternates(alts, prev_quality)
+    return previous
 
 
 def crop_box(image: np.ndarray, x1: int, y1: int, x2: int, y2: int, pad: float = 0.08) -> np.ndarray:

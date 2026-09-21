@@ -146,6 +146,53 @@ def test_plausible_plate_accepts_small_textured_night() -> None:
     assert score > 0
 
 
+def test_caption_text_is_not_a_plate() -> None:
+    import numpy as np
+    from app.preprocessing.plates import has_plate_evidence, is_burned_in_caption
+
+    caption = np.full((48, 280, 3), (12, 12, 12), dtype=np.uint8)
+    caption[16:34, 24:70] = (0, 230, 255)
+    caption[16:34, 86:150] = (0, 220, 255)
+    caption[16:34, 166:230] = (0, 235, 250)
+    assert is_burned_in_caption(caption) is True
+    ok, _, _ = has_plate_evidence(caption, 280, 48, 0.9, dark=False)
+    assert ok is False
+
+
+def test_yellow_plate_is_not_a_caption() -> None:
+    import numpy as np
+    from app.preprocessing.plates import is_burned_in_caption
+
+    plate = np.full((40, 160, 3), (0, 210, 240), dtype=np.uint8)
+    for x in range(12, 140, 16):
+        plate[8:32, x : x + 4] = (15, 15, 15)
+    assert is_burned_in_caption(plate) is False
+
+
+def test_day_plate_rejects_blurry_or_tiny_crop() -> None:
+    import cv2
+    import numpy as np
+    from app.preprocessing.plates import has_plate_evidence
+
+    sharp = np.full((36, 140, 3), 235, dtype=np.uint8)
+    for x in range(10, 130, 12):
+        sharp[6:30, x : x + 3] = 12
+    ok, _, _ = has_plate_evidence(sharp, 140, 36, 0.8, dark=False, frame_width=1920)
+    assert ok is True
+
+    blur = cv2.GaussianBlur(sharp, (21, 21), 0)
+    ok, _, _ = has_plate_evidence(blur, 140, 36, 0.8, dark=False, frame_width=1920)
+    assert ok is False
+    ok, _, _ = has_plate_evidence(sharp, 48, 16, 0.9, dark=False, frame_width=1920)
+    assert ok is False
+
+    small = np.full((18, 42, 3), 230, dtype=np.uint8)
+    for x in range(4, 38, 8):
+        small[3:15, x : x + 2] = 15
+    ok, _, _ = has_plate_evidence(small, 42, 18, 0.75, dark=False, frame_width=848)
+    assert ok is True
+
+
 def test_hard_false_positive_rejects_empty_structure() -> None:
     import numpy as np
     from app.preprocessing.plates import is_hard_false_positive
@@ -225,22 +272,6 @@ def test_plate_index_item_includes_overlay_and_confidence() -> None:
     assert item["plate_confidence"] == 0.81
 
 
-def test_skip_plate_search_until_vehicle_grows() -> None:
-    from app.pipeline.geometry import BoundingBox, Detection
-    from app.pipeline.plate_search import skip_ids_with_strong_evidence
-    from app.tracking.tracker import TrackedVehicle
-
-    vehicle = TrackedVehicle(
-        track_id=7,
-        detection=Detection(BoundingBox(0, 0, 40, 40), "car", 0.9, 1, 0.0),
-    )
-    best = {7: {"score": 0.8}}
-    assert 7 in skip_ids_with_strong_evidence([vehicle], best, {7: 1600.0})
-    assert 7 not in skip_ids_with_strong_evidence([vehicle], best, {7: 1400.0})
-    assert 7 not in skip_ids_with_strong_evidence([vehicle], {}, {7: 1600.0})
-    assert 7 in skip_ids_with_strong_evidence([vehicle], best, {7: 2000.0})
-
-
 def _plate_bars() -> "object":
     import numpy as np
 
@@ -296,15 +327,59 @@ def test_later_pass_same_plate_is_new_row() -> None:
     assert merged is None
 
 
-def test_is_better_evidence_requires_sharpness() -> None:
-    from app.preprocessing.plates import is_better_evidence
+def _candidate(quality: float, frame: int, tag: str) -> dict:
+    import numpy as np
 
-    previous = {"score": 0.55, "plate_area": 1000.0, "sharp": 40.0}
-    assert is_better_evidence(None, 0.4, 100.0, 10.0) is True
-    assert is_better_evidence(previous, 0.50, 1100.0, 38.0) is True
-    assert is_better_evidence(previous, 0.50, 1500.0, 20.0) is False
-    assert is_better_evidence(previous, 0.54, 900.0, 55.0) is True
-    assert is_better_evidence(previous, 0.70, 800.0, 20.0) is False
+    plate = np.full((8, 24, 3), ord(tag[0]) % 200, dtype=np.uint8)
+    return {
+        "quality": quality,
+        "sharp": quality * 400,
+        "plate_area": 1000.0,
+        "contrast": 20.0,
+        "best_frame": frame,
+        "timestamp": frame / 25.0,
+        "plate_confidence": 0.8,
+        "vehicle_confidence": 0.9,
+        "vehicle_type": "car",
+        "plate_box": {"x1": 0, "y1": 0, "x2": 24, "y2": 8},
+        "vehicle_box": {"x1": 0, "y1": 0, "x2": 40, "y2": 40},
+        "image_full": plate,
+        "image_vehicle": plate,
+        "image_plate": plate,
+        "observation": {
+            "frame_number": frame,
+            "timestamp": frame / 25.0,
+            "plate_confidence": 0.8,
+            "bounding_box": {"x1": 0, "y1": 0, "x2": 24, "y2": 8},
+        },
+        "source_ids": {1},
+        "active_tid": 1,
+    }
+
+
+def test_plate_frame_quality_prefers_sharp_over_large_blur() -> None:
+    from app.preprocessing.plates import plate_frame_quality
+
+    sharp_small = plate_frame_quality(sharp=280, plate_area=5000, plate_confidence=0.8, contrast=30)
+    blur_large = plate_frame_quality(sharp=25, plate_area=18000, plate_confidence=0.8, contrast=30)
+    assert sharp_small > blur_large
+
+
+def test_consider_plate_candidate_keeps_highest_quality() -> None:
+    from app.preprocessing.plates import consider_plate_candidate
+
+    capture = consider_plate_candidate(None, _candidate(0.40, 1, "a"))
+    capture = consider_plate_candidate(capture, _candidate(0.70, 5, "b"))
+    capture = consider_plate_candidate(capture, _candidate(0.50, 8, "c"))
+    capture = consider_plate_candidate(capture, _candidate(0.20, 9, "d"))
+    assert capture["best_frame"] == 5
+    assert capture["quality"] == 0.70
+    assert len(capture["observations"]) == 4
+    assert capture["last_seen"] == 9 / 25.0
+    alts = capture["alternates"]
+    assert len(alts) == 2
+    assert alts[0]["quality"] == 0.50
+    assert alts[1]["quality"] == 0.40
 
 
 def test_vehicle_capture_pads_keep_bumper_context() -> None:
@@ -331,15 +406,14 @@ def test_save_jpeg_writes_quality_param(tmp_path) -> None:
     assert dest.stat().st_size > 0
 
 
-def test_capture_publishes_when_leaving_or_lost() -> None:
+def test_capture_publishes_after_unseen_delay() -> None:
     from app.pipeline.runner import capture_is_due_to_publish
 
-    pending = {"published": False, "shrink_streak": 0}
-    assert capture_is_due_to_publish(pending, visible=True) is False
-    pending["shrink_streak"] = 2
-    assert capture_is_due_to_publish(pending, visible=True) is True
-    assert capture_is_due_to_publish({"published": False, "shrink_streak": 0}, visible=False) is True
-    assert capture_is_due_to_publish({"published": True, "shrink_streak": 5}, visible=False) is False
+    pending = {"published": False, "last_seen": 1.0}
+    assert capture_is_due_to_publish(pending, visible=True, now_ts=10.0) is False
+    assert capture_is_due_to_publish(pending, visible=False, now_ts=1.2) is False
+    assert capture_is_due_to_publish(pending, visible=False, now_ts=1.5) is True
+    assert capture_is_due_to_publish({"published": True, "last_seen": 1.0}, visible=False, now_ts=10.0) is False
 
 
 def test_publish_track_capture_writes_once(tmp_path) -> None:
@@ -356,11 +430,17 @@ def test_publish_track_capture_writes_once(tmp_path) -> None:
         "vehicle_type": "car",
         "plate_confidence": 0.8,
         "vehicle_confidence": 0.9,
+        "alternates": [
+            {"image_plate": img, "quality": 0.5},
+            {"image_plate": img, "quality": 0.4},
+        ],
     }
     assert _publish_track_capture(tmp_path, 3, capture, None) is True
     assert (tmp_path / "track_3.jpg").is_file()
     assert (tmp_path / "vehicle_3.jpg").is_file()
     assert (tmp_path / "full_3.jpg").is_file()
+    assert (tmp_path / "track_3_alt1.jpg").is_file()
+    assert (tmp_path / "track_3_alt2.jpg").is_file()
     assert capture["published"] is True
     assert _publish_track_capture(tmp_path, 3, capture, None) is False
 

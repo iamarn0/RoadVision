@@ -4,8 +4,8 @@ import { formatBytes, formatSeconds } from "../lib/api";
 import { statusTone } from "../lib/status";
 
 describe("navigation contract", () => {
-  it("keeps six primary destinations for admins", () => {
-    expect(NAV_COUNT).toBe(6);
+  it("keeps five primary destinations for admins", () => {
+    expect(NAV_COUNT).toBe(5);
   });
 });
 

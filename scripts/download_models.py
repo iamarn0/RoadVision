@@ -1,8 +1,8 @@
 """Download documented model weights into models/.
 
-Vehicle: Ultralytics YOLO11n (COCO) — detects car/motorcycle/bus/truck.
-Plate: YOLOv8n fine-tuned on keremberke/license-plate-object-detection
-       (Hugging Face: joker5914/yolov8n-license-plate).
+Vehicle: Ultralytics YOLO26n (COCO) — detects car/motorcycle/bus/truck.
+Plate: YOLO26n fine-tuned for license plates
+       (Hugging Face: CodexParas/car-plate-detection-yolov26).
 
 Does not create empty placeholder .pt files.
 """
@@ -17,10 +17,13 @@ ROOT = Path(__file__).resolve().parents[1]
 MODELS = ROOT / "models"
 MODELS.mkdir(parents=True, exist_ok=True)
 
-# Public Ultralytics-compatible plate detector (YOLOv8n).
+# Latest released Ultralytics COCO detector. YOLO27 weights are not published yet.
+VEHICLE_WEIGHT = "yolo26n.pt"
+
+# Public Ultralytics YOLO26n license-plate detector.
 PLATE_URLS = (
-    "https://huggingface.co/joker5914/yolov8n-license-plate/resolve/main/best.pt",
-    "https://huggingface.co/joker5914/yolov8n-license-plate/resolve/main/best.pt?download=true",
+    "https://huggingface.co/CodexParas/car-plate-detection-yolov26/resolve/main/best.pt",
+    "https://huggingface.co/CodexParas/car-plate-detection-yolov26/resolve/main/best.pt?download=true",
 )
 
 
@@ -31,54 +34,65 @@ def _download(url: str, dest: Path) -> None:
         shutil.copyfileobj(response, out)
 
 
+def _is_yolo26(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size <= 1_000_000:
+        return False
+    import torch
+
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    train_args = checkpoint.get("train_args") or {}
+    model_name = Path(str(train_args.get("model") or "")).name.lower()
+    return model_name.startswith("yolo26")
+
+
 def main() -> None:
     from ultralytics import YOLO
 
     vehicle_out = MODELS / "vehicle_detector.pt"
-    if vehicle_out.exists() and vehicle_out.stat().st_size > 1_000_000:
+    if _is_yolo26(vehicle_out):
         print(f"Vehicle model already present: {vehicle_out} ({vehicle_out.stat().st_size:,} bytes)")
     else:
-        print("Downloading vehicle detector (yolo11n.pt from Ultralytics)...")
-        YOLO("yolo11n.pt")
-        source = None
-        for candidate in (
-            Path("yolo11n.pt"),
-            ROOT / "yolo11n.pt",
-            Path.home() / "AppData" / "Roaming" / "Ultralytics" / "yolo11n.pt",
-        ):
-            if candidate.exists() and candidate.stat().st_size > 1_000_000:
-                source = candidate
-                break
-        if source is None:
-            for path in Path.home().rglob("yolo11n.pt"):
-                if path.stat().st_size > 1_000_000:
-                    source = path
+        print(f"Downloading vehicle detector ({VEHICLE_WEIGHT} from Ultralytics)...")
+        model = YOLO(VEHICLE_WEIGHT)
+        source = Path(str(getattr(model, "ckpt_path", "") or ""))
+        if not source.is_file() or source.stat().st_size <= 1_000_000:
+            source = Path()
+            for candidate in (
+                Path(VEHICLE_WEIGHT),
+                ROOT / VEHICLE_WEIGHT,
+                Path.home() / "AppData" / "Roaming" / "Ultralytics" / VEHICLE_WEIGHT,
+            ):
+                if candidate.is_file() and candidate.stat().st_size > 1_000_000:
+                    source = candidate
                     break
-        if source is None:
-            raise SystemExit("yolo11n.pt was not found after download")
+        if not source.is_file():
+            raise SystemExit(f"{VEHICLE_WEIGHT} was not found after download")
         shutil.copy2(source, vehicle_out)
         print(f"Vehicle model: {vehicle_out} ({vehicle_out.stat().st_size:,} bytes)")
 
     plate_out = MODELS / "plate_detector.pt"
-    print("Downloading plate detector (joker5914/yolov8n-license-plate)...")
-    last_error: Exception | None = None
-    for url in PLATE_URLS:
-        try:
-            _download(url, plate_out)
-            if plate_out.stat().st_size > 1_000_000:
-                break
-            last_error = SystemExit("plate file too small")
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
-            plate_out.unlink(missing_ok=True)
+    if _is_yolo26(plate_out):
+        print(f"Plate model already present: {plate_out} ({plate_out.stat().st_size:,} bytes)")
     else:
-        raise SystemExit(f"Failed to download plate_detector.pt: {last_error}")
+        print("Downloading plate detector (CodexParas/car-plate-detection-yolov26)...")
+        last_error: Exception | None = None
+        for url in PLATE_URLS:
+            try:
+                _download(url, plate_out)
+                if plate_out.stat().st_size > 1_000_000 and _is_yolo26(plate_out):
+                    break
+                last_error = SystemExit("plate file is missing or is not a YOLO26 checkpoint")
+                plate_out.unlink(missing_ok=True)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                plate_out.unlink(missing_ok=True)
+        else:
+            raise SystemExit(f"Failed to download plate_detector.pt: {last_error}")
 
-    # Validate it loads in Ultralytics
-    YOLO(str(plate_out))
-    print(f"Plate model: {plate_out} ({plate_out.stat().st_size:,} bytes)")
+        YOLO(str(plate_out))
+        print(f"Plate model: {plate_out} ({plate_out.stat().st_size:,} bytes)")
 
-    cwd_weight = Path("yolo11n.pt")
+    cwd_weight = Path(VEHICLE_WEIGHT)
     if cwd_weight.exists() and cwd_weight.resolve() != vehicle_out.resolve():
         cwd_weight.unlink(missing_ok=True)
 

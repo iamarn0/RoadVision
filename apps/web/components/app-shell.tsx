@@ -9,18 +9,16 @@ import {
   LayoutDashboard,
   LogOut,
   Settings,
-  Upload,
   Users,
 } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
-import { canManageUsers, canUpload, roleLabel } from "@/lib/auth";
+import { canManageUsers, roleLabel } from "@/lib/auth";
 
 type NavItem = { href: string; label: string; icon: typeof LayoutDashboard; roles?: string[] };
 
 const NAV: NavItem[] = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
   { href: "/videos", label: "Videos", icon: FolderOpen },
-  { href: "/videos/upload", label: "Upload", icon: Upload, roles: ["admin", "operator"] },
   { href: "/jobs", label: "Processing", icon: Activity },
   { href: "/users", label: "Personnel", icon: Users, roles: ["admin"] },
   { href: "/settings", label: "Settings", icon: Settings },
@@ -69,7 +67,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const role = user?.role;
   const visibleNav = NAV.filter((item) => {
     if (!item.roles) return true;
-    if (item.href === "/videos/upload") return canUpload(role);
     if (item.href === "/users") return canManageUsers(role);
     return item.roles.includes(role || "");
   });

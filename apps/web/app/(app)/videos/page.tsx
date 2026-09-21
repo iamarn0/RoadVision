@@ -1,18 +1,20 @@
 "use client";
 
-import Link from "next/link";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiDelete, apiGet, apiPost, formatBytes, formatSeconds, type JobRead, type VideoRead } from "@/lib/api";
 import { canDeleteVideos, canUpload } from "@/lib/auth";
 import { useAuth } from "@/components/auth-provider";
 import { statusLabel, statusTone } from "@/lib/status";
-import { Button, Card, EmptyState, Skeleton } from "@/components/ui";
+import { Button, Card, EmptyState, Modal, Skeleton } from "@/components/ui";
+import { VideoUploadForm } from "@/components/video-upload-form";
 
 export default function VideosPage() {
   const router = useRouter();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const [uploadOpen, setUploadOpen] = useState(false);
   const allowProcess = canUpload(user?.role);
   const allowDelete = canDeleteVideos(user?.role);
   const videos = useQuery({
@@ -35,9 +37,11 @@ export default function VideosPage() {
           <h1 className="text-xl font-medium">Videos</h1>
           <p className="mt-1 text-sm text-[var(--muted)]">Uploaded roadside and CCTV footage awaiting or completing ANPR.</p>
         </div>
-        <Link href="/videos/upload" className="rounded-sm bg-[var(--accent)] px-3 py-2 text-sm text-white">
-          Upload footage
-        </Link>
+        {allowProcess && (
+          <Button type="button" onClick={() => setUploadOpen(true)}>
+            Upload footage
+          </Button>
+        )}
       </div>
       {videos.isLoading && <Skeleton className="h-40" />}
       {videos.isError && <p className="text-sm text-[#c45c5c]">Unable to load videos.</p>}
@@ -103,6 +107,9 @@ export default function VideosPage() {
           </table>
         </Card>
       )}
+      <Modal open={uploadOpen} title="Upload footage" size="lg" onClose={() => setUploadOpen(false)}>
+        {uploadOpen && <VideoUploadForm key={String(uploadOpen)} onCancel={() => setUploadOpen(false)} />}
+      </Modal>
     </section>
   );
 }

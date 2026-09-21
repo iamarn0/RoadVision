@@ -25,15 +25,15 @@ Must emit classes that can be mapped to:
 
 Ultralytics YOLO models are commonly used for COCO vehicle classes:
 
-1. Download a nano/small YOLO weight you are licensed to use (for example `yolo11n.pt` from Ultralytics).
+1. Download a nano/small YOLO weight you are licensed to use. The current checkpoint is Ultralytics YOLO26n (`yolo26n.pt`), the latest released COCO detector. YOLO27 is not available yet.
 2. Copy or symlink it to `models/vehicle_detector.pt`.
 3. Set `VEHICLE_MODEL_VERSION` to the checkpoint name and date.
 
 Example (operator-run; not performed automatically by RoadVision):
 
-```bash
+```powershell
 # After installing ultralytics in the worker environment:
-python -c "from ultralytics import YOLO; YOLO('yolo11n.pt').save('models/vehicle_detector.pt')"
+py -3 -c "from ultralytics import YOLO; YOLO('yolo26n.pt').save('models/vehicle_detector.pt')"
 ```
 
 Always review Ultralytics license terms before redistribution.
@@ -44,8 +44,8 @@ Do **not** treat vehicle boxes as plates. Use a dedicated license-plate detector
 
 Recommended public checkpoint for demos:
 
-- Source: [joker5914/yolov8n-license-plate](https://huggingface.co/joker5914/yolov8n-license-plate)
-- Trained on: [keremberke/license-plate-object-detection](https://huggingface.co/datasets/keremberke/license-plate-object-detection)
+- Source: [CodexParas/car-plate-detection-yolov26](https://huggingface.co/CodexParas/car-plate-detection-yolov26)
+- Architecture: Ultralytics YOLO26n
 - Local path: `models/plate_detector.pt`
 
 Download both detectors:

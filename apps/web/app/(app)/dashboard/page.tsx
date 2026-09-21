@@ -60,7 +60,7 @@ export default function DashboardPage() {
             Live ANPR operations summary from processed CCTV and roadside footage.
           </p>
         </div>
-        <Link href="/videos/upload" className="rounded-sm bg-[var(--accent)] px-3 py-2 text-sm text-white">
+        <Link href="/videos" className="rounded-sm bg-[var(--accent)] px-3 py-2 text-sm text-white">
           Upload footage
         </Link>
       </div>

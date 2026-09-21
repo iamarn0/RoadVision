@@ -11,13 +11,13 @@ from app.preprocessing.plates import (
     crop_box_asymmetric,
     enhance_low_light_frame,
     frame_luminance,
+    is_burned_in_caption,
 )
 from app.tracking.tracker import TrackedVehicle
 
 ROI_IMAGE_SIZE = 640
 MIN_PLATE_SEARCH_AREA = 2500.0
 MIN_PLATE_SEARCH_WIDTH = 36.0
-GROWTH_SEARCH_RATIO = 1.05
 
 
 def remap_plate_box(local: BoundingBox, origin_x: float, origin_y: float) -> BoundingBox:
@@ -62,24 +62,6 @@ def prepare_roi_for_detect(roi: np.ndarray) -> np.ndarray:
     return roi
 
 
-def skip_ids_with_strong_evidence(
-    vehicles: list[TrackedVehicle],
-    best_by_track: dict[int, dict[str, Any]],
-    last_search_areas: dict[int, float],
-) -> set[int]:
-    """Skip plate YOLO unless this is first sight or the vehicle got ~5% closer."""
-    skip: set[int] = set()
-    for vehicle in vehicles:
-        best = best_by_track.get(vehicle.track_id)
-        if not best:
-            continue
-        area = vehicle.detection.bounding_box.area
-        prev = float(last_search_areas.get(vehicle.track_id) or 0.0)
-        if prev > 0 and area < prev * GROWTH_SEARCH_RATIO:
-            skip.add(vehicle.track_id)
-    return skip
-
-
 def search_plates_in_vehicles(
     frame_image: np.ndarray,
     vehicles: list[TrackedVehicle],
@@ -114,6 +96,7 @@ def search_plates_in_vehicles(
         confidence=confidence,
         image_size=ROI_IMAGE_SIZE,
     )
+    frame_h, frame_w = frame_image.shape[:2]
     assigned: list[tuple[TrackedVehicle, Detection]] = []
     for (ox, oy, vehicle), detections in zip(origins, batches):
         best: Detection | None = None
@@ -126,8 +109,25 @@ def search_plates_in_vehicles(
                 timestamp=timestamp,
                 track_id=vehicle.track_id,
             )
+            if _crop_is_caption(frame_image, remapped, frame_w, frame_h):
+                continue
             if best is None or remapped.confidence > best.confidence:
                 best = remapped
         if best:
             assigned.append((vehicle, best))
     return assigned
+
+
+def _crop_is_caption(frame: np.ndarray, plate: Detection, frame_w: int, frame_h: int) -> bool:
+    x1, y1, x2, y2 = plate.bounding_box.clip(frame_w, frame_h).as_int()
+    if x2 <= x1 or y2 <= y1:
+        return False
+    return is_burned_in_caption(frame[y1:y2, x1:x2])
+
+
+def drop_caption_plates(frame: np.ndarray, plates: list[Detection]) -> list[Detection]:
+    """Drop plate boxes that sit on the burned-in camera caption."""
+    if frame.size == 0:
+        return plates
+    frame_h, frame_w = frame.shape[:2]
+    return [plate for plate in plates if not _crop_is_caption(frame, plate, frame_w, frame_h)]
