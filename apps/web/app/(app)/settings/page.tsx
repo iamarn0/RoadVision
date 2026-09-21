@@ -16,6 +16,8 @@ type AppVersion = {
 
 type SettingsPublic = {
   app_version: string;
+  git_commit: string;
+  environment: string;
   processing_profile: string;
   inference_image_size: number;
   frame_skip: number;
@@ -74,23 +76,33 @@ export default function SettingsPage() {
   }
 
   const s = settings.data;
+  const version = appVersion.data?.version ?? s.app_version;
+  const commit = appVersion.data?.commit ?? s.git_commit ?? "unknown";
+  const environment = appVersion.data?.environment ?? s.environment ?? "—";
 
   return (
     <section className="space-y-4">
       <div>
         <h1 className="text-xl font-medium">Settings</h1>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Runtime configuration for RoadVision v{s.app_version}. Secrets are never displayed.
+          Runtime configuration. Secrets are never displayed.
         </p>
       </div>
 
       <Card>
-        <h2 className="text-sm font-medium">System information</h2>
-        <ul className="mt-3 space-y-1 text-sm">
-          <li>Version: {appVersion.data?.version ?? s.app_version}</li>
-          <li>Commit: {appVersion.data?.commit ?? "unknown"}</li>
-          <li>Environment: {appVersion.data?.environment ?? "—"}</li>
-        </ul>
+        <p className="text-xs uppercase tracking-wide text-[var(--muted)]">Product version</p>
+        <p className="mt-2 text-2xl font-medium tabular-nums tracking-tight">v{version}</p>
+        <p className="mt-1 text-sm text-[var(--muted)]">RoadVision {version}</p>
+        <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+          <div>
+            <dt className="text-[var(--muted)]">Git commit</dt>
+            <dd className="mt-0.5 font-mono text-[var(--text)]">{commit}</dd>
+          </div>
+          <div>
+            <dt className="text-[var(--muted)]">Environment</dt>
+            <dd className="mt-0.5 text-[var(--text)]">{environment}</dd>
+          </div>
+        </dl>
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">

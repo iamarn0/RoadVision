@@ -118,7 +118,12 @@ class Video(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    jobs: Mapped[list[ProcessingJob]] = relationship(back_populates="video")
+    jobs: Mapped[list[ProcessingJob]] = relationship(
+        back_populates="video", cascade="all, delete-orphan"
+    )
+    assets: Mapped[list[MediaAsset]] = relationship(
+        back_populates="video", cascade="all, delete-orphan"
+    )
     created_by: Mapped[Optional[User]] = relationship(foreign_keys=[created_by_user_id])
 
     __table_args__ = (Index("ix_videos_created_at", "created_at"),)
@@ -269,6 +274,7 @@ class MediaAsset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     job: Mapped[Optional[ProcessingJob]] = relationship(back_populates="assets")
+    video: Mapped[Optional[Video]] = relationship(back_populates="assets")
 
 
 class Export(Base):

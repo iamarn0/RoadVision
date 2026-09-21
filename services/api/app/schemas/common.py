@@ -177,6 +177,8 @@ class ExportRead(ORMModel):
 
 class SettingsPublic(BaseModel):
     app_version: str
+    git_commit: str
+    environment: str
     processing_profile: str
     inference_image_size: int
     frame_skip: int

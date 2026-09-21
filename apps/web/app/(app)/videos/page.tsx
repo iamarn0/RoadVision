@@ -4,12 +4,17 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiDelete, apiGet, apiPost, formatBytes, formatSeconds, type JobRead, type VideoRead } from "@/lib/api";
+import { canDeleteVideos, canUpload } from "@/lib/auth";
+import { useAuth } from "@/components/auth-provider";
 import { statusLabel, statusTone } from "@/lib/status";
 import { Button, Card, EmptyState, Skeleton } from "@/components/ui";
 
 export default function VideosPage() {
   const router = useRouter();
+  const { user } = useAuth();
   const queryClient = useQueryClient();
+  const allowProcess = canUpload(user?.role);
+  const allowDelete = canDeleteVideos(user?.role);
   const videos = useQuery({
     queryKey: ["videos"],
     queryFn: () => apiGet<VideoRead[]>("/api/videos"),
@@ -36,6 +41,12 @@ export default function VideosPage() {
       </div>
       {videos.isLoading && <Skeleton className="h-40" />}
       {videos.isError && <p className="text-sm text-[#c45c5c]">Unable to load videos.</p>}
+      {remove.isError && (
+        <p className="text-sm text-[#c45c5c]">{remove.error instanceof Error ? remove.error.message : "Unable to delete video."}</p>
+      )}
+      {process.isError && (
+        <p className="text-sm text-[#c45c5c]">{process.error instanceof Error ? process.error.message : "Unable to start processing."}</p>
+      )}
       {videos.data && videos.data.length === 0 && (
         <EmptyState
           title="No footage uploaded yet"
@@ -67,18 +78,23 @@ export default function VideosPage() {
                   <td className={`px-4 py-3 ${statusTone(video.status)}`}>{statusLabel(video.status)}</td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2">
-                      <Button type="button" onClick={() => process.mutate(video.id)}>
-                        Process
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="danger"
-                        onClick={() => {
-                          if (confirm("Delete this video?")) remove.mutate(video.id);
-                        }}
-                      >
-                        Delete
-                      </Button>
+                      {allowProcess && (
+                        <Button type="button" onClick={() => process.mutate(video.id)} disabled={process.isPending}>
+                          Process
+                        </Button>
+                      )}
+                      {allowDelete && (
+                        <Button
+                          type="button"
+                          variant="danger"
+                          disabled={remove.isPending}
+                          onClick={() => {
+                            if (confirm("Delete this video and its processing jobs?")) remove.mutate(video.id);
+                          }}
+                        >
+                          {remove.isPending ? "Deleting…" : "Delete"}
+                        </Button>
+                      )}
                     </div>
                   </td>
                 </tr>

@@ -11,11 +11,11 @@ from app.database import get_db
 from app.repositories.core import AssetRepository, VideoRepository
 from app.schemas.common import VideoRead
 from app.security.audit import write_audit
-from app.security.deps import RequireAdmin, RequireOperator, RequireReader, client_ip
+from app.security.deps import RequireOperator, RequireReader, client_ip
 from app.services.video_validation import probe_video_metadata, validate_upload
-from app.storage.service import get_storage
+from app.storage.service import StorageService, get_storage
 from packages.db.enums import AssetType, VideoStatus
-from packages.db.models import MediaAsset, Video
+from packages.db.models import MediaAsset, ProcessingJob, Video
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
 
@@ -106,11 +106,21 @@ def get_video(video_id: UUID, _: RequireReader, db: Session = Depends(get_db)) -
     return _video_read(db, video)
 
 
+def _delete_storage_key(storage: StorageService, storage_key: str | None) -> None:
+    if not storage_key:
+        return
+    try:
+        storage.delete(storage_key)
+    except Exception:
+        # Missing or locked files must not block removing the database row.
+        pass
+
+
 @router.delete("/{video_id}", summary="Delete a video and its files")
 def delete_video(
     video_id: UUID,
     request: Request,
-    admin: RequireAdmin,
+    user: RequireOperator,
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     repo = VideoRepository(db)
@@ -118,11 +128,23 @@ def delete_video(
     if not video:
         raise AppError(ErrorCodes.NOT_FOUND, "Video not found", status_code=404)
     storage = get_storage()
-    storage.delete(video.storage_key)
+    keys = {video.storage_key}
+    jobs = list(db.scalars(select(ProcessingJob).where(ProcessingJob.video_id == video.id)))
+    assets = list(db.scalars(select(MediaAsset).where(MediaAsset.video_id == video.id)))
+    for job in jobs:
+        assets.extend(list(job.assets))
+        for asset in job.assets:
+            keys.add(asset.storage_key)
+        for export in job.exports:
+            keys.add(export.storage_key)
+    for asset in assets:
+        keys.add(asset.storage_key)
+    for key in keys:
+        _delete_storage_key(storage, key)
     write_audit(
         db,
         action="video_delete",
-        user_id=None if get_settings().auth_disabled else admin.id,
+        user_id=None if get_settings().auth_disabled else user.id,
         resource_type="video",
         resource_id=str(video.id),
         ip=client_ip(request),

@@ -53,6 +53,9 @@ def test_settings_does_not_expose_secrets() -> None:
     assert "password" not in str(body).lower()
     assert body["authentication_enabled"] is False  # AUTH_DISABLED=true in tests
     assert body["app_version"] == read_app_version()
+    assert isinstance(body["git_commit"], str)
+    assert body["git_commit"]
+    assert "environment" in body
 
 
 def test_app_version_ignores_env_override(monkeypatch: pytest.MonkeyPatch) -> None:

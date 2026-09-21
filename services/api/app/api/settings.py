@@ -12,6 +12,8 @@ def public_settings(_: RequireReader) -> SettingsPublic:
     settings = get_settings()
     return SettingsPublic(
         app_version=settings.app_version,
+        git_commit=settings.git_commit,
+        environment=settings.app_env,
         processing_profile=settings.processing_profile,
         inference_image_size=settings.inference_image_size,
         frame_skip=settings.frame_skip,

@@ -28,6 +28,10 @@ export function canUpload(role: string | undefined): boolean {
   return role === "admin" || role === "operator";
 }
 
+export function canDeleteVideos(role: string | undefined): boolean {
+  return canUpload(role);
+}
+
 export function canManageUsers(role: string | undefined): boolean {
   return role === "admin";
 }
