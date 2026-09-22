@@ -63,6 +63,7 @@ export default function VideosPage() {
             <thead className="border-b border-[var(--border)] text-xs uppercase tracking-wide text-[var(--muted)]">
               <tr>
                 <th className="px-4 py-3">Filename</th>
+                <th className="px-4 py-3">District</th>
                 <th className="px-4 py-3">Size</th>
                 <th className="px-4 py-3">Resolution</th>
                 <th className="px-4 py-3">Duration</th>
@@ -74,6 +75,7 @@ export default function VideosPage() {
               {videos.data.map((video) => (
                 <tr key={video.id} className="border-b border-[var(--border)]">
                   <td className="px-4 py-3">{video.original_filename}</td>
+                  <td className="px-4 py-3">{video.district_name ?? "—"}</td>
                   <td className="px-4 py-3">{formatBytes(video.file_size)}</td>
                   <td className="px-4 py-3">
                     {video.width && video.height ? `${video.width}x${video.height}` : "-"}

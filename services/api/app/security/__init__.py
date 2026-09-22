@@ -1,5 +1,6 @@
 from app.security.deps import (
     RequireAdmin,
+    RequireDistrictMaster,
     RequireOperator,
     RequireReader,
     authenticate_websocket,
@@ -11,6 +12,7 @@ from app.security.deps import (
 
 __all__ = [
     "RequireAdmin",
+    "RequireDistrictMaster",
     "RequireOperator",
     "RequireReader",
     "authenticate_websocket",

@@ -4,11 +4,12 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.core.errors import AppError, ErrorCodes
 from app.database import get_db
+from app.repositories.core import JobRepository
 from app.schemas.common import ExportRead
 from app.security.audit import write_audit
 from app.security.deps import RequireOperator, RequireReader, client_ip
+from app.security.districts import require_export_scope, require_job_scope, scoped_district_ids
 from app.services.exports import create_export
 from packages.db.models import Export
 
@@ -16,6 +17,7 @@ router = APIRouter(tags=["exports"])
 
 
 def _create(job_id: UUID, export_type: str, request: Request, user, db: Session) -> ExportRead:
+    require_job_scope(db, JobRepository(db).get(job_id), scoped_district_ids(db, user))
     export = create_export(db, job_id, export_type)
     write_audit(
         db,
@@ -59,8 +61,6 @@ def export_zip(
 
 
 @router.get("/api/exports/{export_id}", response_model=ExportRead)
-def get_export(export_id: UUID, _: RequireReader, db: Session = Depends(get_db)) -> ExportRead:
-    export = db.get(Export, export_id)
-    if not export:
-        raise AppError(ErrorCodes.NOT_FOUND, "Export not found", status_code=404)
+def get_export(export_id: UUID, user: RequireReader, db: Session = Depends(get_db)) -> ExportRead:
+    export = require_export_scope(db, db.get(Export, export_id), scoped_district_ids(db, user))
     return ExportRead.model_validate(export)

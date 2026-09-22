@@ -101,6 +101,7 @@ def test_login_success(auth_client: TestClient) -> None:
     body = response.json()
     assert body["email"] == "admin@example.com"
     assert body["role"] == "admin"
+    assert body["districts"] == []
     assert "roadvision_session" in response.cookies
 
 
@@ -152,17 +153,13 @@ def test_non_admin_cannot_list_users(auth_client: TestClient) -> None:
     assert response.status_code == 403
 
 
-def test_admin_can_create_user(auth_client: TestClient) -> None:
+def test_admin_cannot_create_user(auth_client: TestClient) -> None:
     assert _login(auth_client, "admin@example.com", "BootstrapAdmin1!").status_code == 200
     response = auth_client.post(
         "/api/users",
-        json={"email": "new.op@example.com", "display_name": "New Op", "role": "operator"},
+        json={"email": "new.op@example.com", "display_name": "New Op", "role": "operator", "district_ids": []},
     )
-    assert response.status_code == 201
-    body = response.json()
-    assert body["user"]["email"] == "new.op@example.com"
-    assert body["temporary_password"]
-    assert body["user"]["must_change_password"] is False
+    assert response.status_code == 403
 
 
 def test_websocket_rejects_without_cookie(auth_client: TestClient) -> None:

@@ -120,6 +120,8 @@ export type VideoRead = {
   status: string;
   source_type: string;
   original_asset_id?: string | null;
+  district_id?: string | null;
+  district_name?: string | null;
   created_at: string;
 };
 
@@ -150,6 +152,8 @@ export type JobRead = {
   source_fps?: number | null;
   live_frame_available?: boolean;
   paused?: boolean;
+  district_id?: string | null;
+  district_name?: string | null;
   metrics?: Record<string, unknown> | null;
 };
 

@@ -47,5 +47,6 @@ class ExportStatus(str, enum.Enum):
 
 class UserRole(str, enum.Enum):
     ADMIN = "admin"
+    DISTRICT_MASTER = "district_master"
     OPERATOR = "operator"
     AUDITOR = "auditor"

@@ -63,14 +63,26 @@ def require_roles(*roles: str) -> Callable:
 
 
 RequireAdmin = Annotated[User, Depends(require_roles(UserRole.ADMIN.value))]
+RequireDistrictMaster = Annotated[User, Depends(require_roles(UserRole.DISTRICT_MASTER.value))]
 RequireOperator = Annotated[
     User,
-    Depends(require_roles(UserRole.ADMIN.value, UserRole.OPERATOR.value)),
+    Depends(
+        require_roles(
+            UserRole.ADMIN.value,
+            UserRole.DISTRICT_MASTER.value,
+            UserRole.OPERATOR.value,
+        )
+    ),
 ]
 RequireReader = Annotated[
     User,
     Depends(
-        require_roles(UserRole.ADMIN.value, UserRole.OPERATOR.value, UserRole.AUDITOR.value)
+        require_roles(
+            UserRole.ADMIN.value,
+            UserRole.DISTRICT_MASTER.value,
+            UserRole.OPERATOR.value,
+            UserRole.AUDITOR.value,
+        )
     ),
 ]
 

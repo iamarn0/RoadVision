@@ -97,6 +97,7 @@ export default function DashboardPage() {
                 <li key={job.id} className="flex items-center justify-between text-sm">
                   <Link href={`/jobs/${job.id}`} className="text-[var(--accent)] hover:underline">
                     {job.source_filename ?? job.id.slice(0, 8)}
+                    {job.district_name ? ` · ${job.district_name}` : ""}
                   </Link>
                   <span className={statusTone(job.status)}>
                     {statusLabel(job.status)} · {job.progress.toFixed(0)}%
@@ -115,7 +116,10 @@ export default function DashboardPage() {
             <ul className="mt-3 space-y-2 text-sm">
               {data.recent_videos.map((video) => (
                 <li key={video.id} className="flex justify-between gap-3">
-                  <span className="truncate">{video.original_filename}</span>
+                  <span className="truncate">
+                    {video.original_filename}
+                    {video.district_name ? ` · ${video.district_name}` : ""}
+                  </span>
                   <span className="text-[var(--muted)]">
                     {video.width && video.height ? `${video.width}×${video.height}` : "—"}
                   </span>

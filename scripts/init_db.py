@@ -30,6 +30,14 @@ def main() -> None:
     if settings.database_url.startswith("sqlite"):
         Path(settings.storage_root).mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
+    from app.database.session import get_session_factory
+    from app.security.districts import seed_west_bengal_districts
+
+    db = get_session_factory()()
+    try:
+        seed_west_bengal_districts(db)
+    finally:
+        db.close()
     print(f"Schema ready: {settings.database_url}")
 
 

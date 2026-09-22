@@ -33,6 +33,7 @@ export default function JobsPage() {
             <thead className="border-b border-[var(--border)] text-xs uppercase tracking-wide text-[var(--muted)]">
               <tr>
                 <th className="px-4 py-3">Video</th>
+                <th className="px-4 py-3">District</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Progress</th>
                 <th className="px-4 py-3">FPS</th>
@@ -48,6 +49,7 @@ export default function JobsPage() {
                       {job.source_filename ?? job.id.slice(0, 8)}
                     </Link>
                   </td>
+                  <td className="px-4 py-3">{job.district_name ?? "—"}</td>
                   <td className={`px-4 py-3 ${statusTone(job.status)}`}>{statusLabel(job.status)}</td>
                   <td className="px-4 py-3">{job.progress.toFixed(1)}%</td>
                   <td className="px-4 py-3">{job.processing_fps?.toFixed(1) ?? "—"}</td>

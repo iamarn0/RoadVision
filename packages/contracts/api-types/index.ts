@@ -49,7 +49,12 @@ export interface ApiError {
   details?: Record<string, unknown>;
 }
 
-export type UserRole = "admin" | "operator" | "auditor";
+export type UserRole = "admin" | "district_master" | "operator" | "auditor";
+
+export interface DistrictRef {
+  id: string;
+  name: string;
+}
 
 export interface AuthUser {
   id: string;
@@ -60,4 +65,5 @@ export interface AuthUser {
   must_change_password: boolean;
   created_at: string;
   last_login_at: string | null;
+  districts?: DistrictRef[];
 }

@@ -66,10 +66,9 @@ def run_migrations_online() -> None:
             )
             current = connection.execute(text("SELECT version_num FROM alembic_version")).fetchone()
             if current is None:
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('002_auth')"))
-            elif current[0] == "001_initial":
-                # Fresh create_all already includes auth tables; advance stamp.
-                connection.execute(text("UPDATE alembic_version SET version_num = '002_auth'"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('003_districts')"))
+            elif current[0] in {"001_initial", "002_auth"}:
+                connection.execute(text("UPDATE alembic_version SET version_num = '003_districts'"))
         print(f"SQLite schema ready at {url}")
         return
 

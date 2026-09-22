@@ -7,7 +7,7 @@ from sqlalchemy.engine import Engine
 
 
 def ensure_sqlite_auth_schema(engine: Engine) -> None:
-    """Create missing auth tables and add nullable attribution columns on existing DBs."""
+    """Create missing auth/district columns on existing SQLite databases."""
     if not str(engine.url).startswith("sqlite"):
         return
 
@@ -17,6 +17,8 @@ def ensure_sqlite_auth_schema(engine: Engine) -> None:
             video_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(videos)"))}
             if "created_by_user_id" not in video_cols:
                 conn.execute(text("ALTER TABLE videos ADD COLUMN created_by_user_id CHAR(36)"))
+            if "district_id" not in video_cols:
+                conn.execute(text("ALTER TABLE videos ADD COLUMN district_id CHAR(36)"))
         if "processing_jobs" in tables:
             job_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(processing_jobs)"))}
             if "created_by_user_id" not in job_cols:

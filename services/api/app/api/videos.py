@@ -1,7 +1,7 @@
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.repositories.core import AssetRepository, VideoRepository
 from app.schemas.common import VideoRead
 from app.security.audit import write_audit
 from app.security.deps import RequireOperator, RequireReader, client_ip
+from app.security.districts import require_appointed_district, require_video_scope, scoped_district_ids
 from app.services.video_validation import probe_video_metadata, validate_upload
 from app.storage.service import StorageService, get_storage
 from packages.db.enums import AssetType, VideoStatus
@@ -28,7 +29,14 @@ def _video_read(db: Session, video: Video) -> VideoRead:
         )
     )
     data = VideoRead.model_validate(video)
-    return data.model_copy(update={"original_asset_id": asset.id if asset else None})
+    district = video.district
+    return data.model_copy(
+        update={
+            "original_asset_id": asset.id if asset else None,
+            "district_id": video.district_id,
+            "district_name": district.name if district else None,
+        }
+    )
 
 
 @router.post("/upload", summary="Upload a roadside video file", response_model=VideoRead)
@@ -36,12 +44,21 @@ async def upload_video(
     request: Request,
     user: RequireOperator,
     file: UploadFile = File(...),
+    district_id: UUID | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> VideoRead:
     settings = get_settings()
     filename = file.filename or "upload.bin"
     data = await file.read()
     validate_upload(filename, file.content_type, len(data), settings)
+
+    assigned_district = None
+    if not settings.auth_disabled:
+        if district_id is None:
+            raise AppError(ErrorCodes.VALIDATION_ERROR, "Select a district for this video", status_code=400)
+        assigned_district = require_appointed_district(db, user, district_id)
+    elif district_id is not None:
+        assigned_district = require_appointed_district(db, user, district_id)
 
     storage = get_storage()
     storage_key = storage.save("uploads", filename, data)
@@ -67,6 +84,7 @@ async def upload_video(
         source_type=settings.default_source_type,
         source_id=str(path.name),
         created_by_user_id=None if get_settings().auth_disabled else user.id,
+        district_id=assigned_district.id if assigned_district else None,
     )
     VideoRepository(db).add(video)
     AssetRepository(db).add(
@@ -86,7 +104,7 @@ async def upload_video(
         resource_type="video",
         resource_id=None,
         ip=client_ip(request),
-        details={"filename": Path(filename).name},
+        details={"filename": Path(filename).name, "district_id": str(assigned_district.id) if assigned_district else None},
     )
     db.commit()
     db.refresh(video)
@@ -94,15 +112,13 @@ async def upload_video(
 
 
 @router.get("", summary="List uploaded videos", response_model=list[VideoRead])
-def list_videos(_: RequireReader, db: Session = Depends(get_db)) -> list[VideoRead]:
-    return [_video_read(db, v) for v in VideoRepository(db).list()]
+def list_videos(user: RequireReader, db: Session = Depends(get_db)) -> list[VideoRead]:
+    return [_video_read(db, v) for v in VideoRepository(db).list(district_ids=scoped_district_ids(db, user))]
 
 
 @router.get("/{video_id}", summary="Get video metadata", response_model=VideoRead)
-def get_video(video_id: UUID, _: RequireReader, db: Session = Depends(get_db)) -> VideoRead:
-    video = VideoRepository(db).get(video_id)
-    if not video:
-        raise AppError(ErrorCodes.NOT_FOUND, "Video not found", status_code=404)
+def get_video(video_id: UUID, user: RequireReader, db: Session = Depends(get_db)) -> VideoRead:
+    video = require_video_scope(VideoRepository(db).get(video_id), scoped_district_ids(db, user))
     return _video_read(db, video)
 
 
@@ -124,9 +140,7 @@ def delete_video(
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     repo = VideoRepository(db)
-    video = repo.get(video_id)
-    if not video:
-        raise AppError(ErrorCodes.NOT_FOUND, "Video not found", status_code=404)
+    video = require_video_scope(repo.get(video_id), scoped_district_ids(db, user))
     storage = get_storage()
     keys = {video.storage_key}
     jobs = list(db.scalars(select(ProcessingJob).where(ProcessingJob.video_id == video.id)))

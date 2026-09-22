@@ -8,15 +8,31 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.core.errors import AppError, ErrorCodes
 from app.database import get_db
-from app.schemas.auth import ChangePasswordRequest, LoginRequest, MeResponse
+from app.schemas.auth import ChangePasswordRequest, DistrictRead, LoginRequest, MeResponse
 from app.security.audit import write_audit
 from app.security.deps import client_ip, get_current_user
+from app.security.districts import districts_for_user
 from app.security.passwords import hash_password, verify_password
 from app.security.rate_limit import check_login_allowed, clear_login_failures, record_login_failure
 from app.security.sessions import create_session, delete_session_by_token
 from packages.db.models import User
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+def _me_response(db: Session, user: User) -> MeResponse:
+    assigned = districts_for_user(db, user)
+    return MeResponse(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        role=user.role,
+        is_active=user.is_active,
+        must_change_password=user.must_change_password,
+        created_at=user.created_at or datetime.now(UTC),
+        last_login_at=user.last_login_at,
+        districts=[DistrictRead(id=row.id, name=row.name) for row in assigned],
+    )
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -85,7 +101,7 @@ def login(
     db.commit()
     db.refresh(user)
     _set_session_cookie(response, token)
-    return MeResponse.model_validate(user)
+    return _me_response(db, user)
 
 
 @router.post("/logout")
@@ -105,8 +121,8 @@ def logout(
 
 
 @router.get("/me", response_model=MeResponse)
-def me(user: User = Depends(get_current_user)) -> MeResponse:
-    return MeResponse.model_validate(user)
+def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> MeResponse:
+    return _me_response(db, user)
 
 
 @router.post("/change-password", response_model=MeResponse)
@@ -125,4 +141,4 @@ def change_password(
     write_audit(db, action="password_changed", user_id=user.id, ip=client_ip(request))
     db.commit()
     db.refresh(user)
-    return MeResponse.model_validate(user)
+    return _me_response(db, user)

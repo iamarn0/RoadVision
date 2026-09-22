@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import router as auth_router
 from app.api.dashboard import router as dashboard_router
+from app.api.districts import router as districts_router
 from app.api.exports import router as exports_router
 from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
@@ -40,6 +41,9 @@ async def lifespan(_app: FastAPI):
     factory = get_session_factory()
     db = factory()
     try:
+        from app.security.districts import seed_west_bengal_districts
+
+        seed_west_bengal_districts(db)
         bootstrap_admin(db)
     finally:
         db.close()
@@ -75,6 +79,7 @@ app.add_exception_handler(HTTPException, http_error_handler)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(users_router)
+app.include_router(districts_router)
 app.include_router(system_router)
 app.include_router(videos_router)
 app.include_router(jobs_router)

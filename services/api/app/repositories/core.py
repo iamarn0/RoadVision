@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from packages.db.models import Export, MediaAsset, Observation, PlateDetection, ProcessingJob, VehicleTrack, Video
 
@@ -18,10 +18,21 @@ class VideoRepository:
         return video
 
     def get(self, video_id: UUID) -> Video | None:
-        return self.db.get(Video, video_id)
+        return self.db.scalar(
+            select(Video).options(selectinload(Video.district)).where(Video.id == video_id)
+        )
 
-    def list(self, limit: int = 50) -> list[Video]:
-        return list(self.db.scalars(select(Video).order_by(Video.created_at.desc()).limit(limit)))
+    def list(self, limit: int = 50, district_ids: set[UUID] | None = None) -> list[Video]:
+        from app.security.districts import video_scope_clause
+
+        stmt = (
+            select(Video)
+            .options(selectinload(Video.district))
+            .where(video_scope_clause(district_ids))
+            .order_by(Video.created_at.desc())
+            .limit(limit)
+        )
+        return list(self.db.scalars(stmt))
 
     def delete(self, video: Video) -> None:
         self.db.delete(video)
@@ -39,19 +50,31 @@ class JobRepository:
     def get(self, job_id: UUID) -> ProcessingJob | None:
         return self.db.get(ProcessingJob, job_id)
 
-    def list(self, limit: int = 50) -> list[ProcessingJob]:
-        return list(
-            self.db.scalars(select(ProcessingJob).order_by(ProcessingJob.created_at.desc()).limit(limit))
-        )
+    def list(self, limit: int = 50, district_ids: set[UUID] | None = None) -> list[ProcessingJob]:
+        from app.security.districts import video_scope_clause
 
-    def active(self) -> list[ProcessingJob]:
-        return list(
-            self.db.scalars(
-                select(ProcessingJob)
-                .where(ProcessingJob.status.in_(["queued", "validating", "processing", "finalizing"]))
-                .order_by(ProcessingJob.created_at.desc())
-            )
+        stmt = (
+            select(ProcessingJob)
+            .join(Video, ProcessingJob.video_id == Video.id)
+            .where(video_scope_clause(district_ids))
+            .order_by(ProcessingJob.created_at.desc())
+            .limit(limit)
         )
+        return list(self.db.scalars(stmt))
+
+    def active(self, district_ids: set[UUID] | None = None) -> list[ProcessingJob]:
+        from app.security.districts import video_scope_clause
+
+        stmt = (
+            select(ProcessingJob)
+            .join(Video, ProcessingJob.video_id == Video.id)
+            .where(
+                ProcessingJob.status.in_(["queued", "validating", "processing", "finalizing"]),
+                video_scope_clause(district_ids),
+            )
+            .order_by(ProcessingJob.created_at.desc())
+        )
+        return list(self.db.scalars(stmt))
 
 
 class AssetRepository:

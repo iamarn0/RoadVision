@@ -23,6 +23,8 @@ class VideoRead(ORMModel):
     status: str
     source_type: str
     original_asset_id: Optional[UUID] = None
+    district_id: Optional[UUID] = None
+    district_name: Optional[str] = None
     created_at: datetime
 
 
@@ -68,6 +70,8 @@ class JobRead(ORMModel):
     source_fps: Optional[float] = None
     live_frame_available: bool = False
     paused: bool = False
+    district_id: Optional[UUID] = None
+    district_name: Optional[str] = None
 
 
 class LiveCaptureItem(BaseModel):

@@ -28,6 +28,7 @@ from app.repositories.core import AssetRepository, JobRepository, VideoRepositor
 from app.schemas.common import CaptureJobResponse, JobRead, LiveCapturesResponse, ProcessJobRequest
 from app.security.audit import write_audit
 from app.security.deps import RequireOperator, RequireReader, client_ip
+from app.security.districts import require_job_scope, require_video_scope, scoped_district_ids
 from packages.capture_index import item_by_key, load_index, snapshot_index_item, upsert_index_item
 from packages.overlay_clock import overlay_label
 from packages.db.enums import AssetType, JobStatus
@@ -170,6 +171,7 @@ def _job_read(db: Session, job: ProcessingJob) -> JobRead:
             )
         )
     live_path = _live_frame_path(job.id)
+    district = video.district if video else None
     payload = JobRead.model_validate(job).model_copy(
         update={
             "source_filename": video.original_filename if video else None,
@@ -178,6 +180,8 @@ def _job_read(db: Session, job: ProcessingJob) -> JobRead:
             "source_fps": video.fps if video else None,
             "live_frame_available": live_path.exists(),
             "paused": is_paused(job.id),
+            "district_id": video.district_id if video else None,
+            "district_name": district.name if district else None,
         }
     )
     return payload
@@ -192,9 +196,7 @@ def create_job(
     db: Session = Depends(get_db),
 ) -> JobRead:
     body = body or ProcessJobRequest()
-    video = VideoRepository(db).get(video_id)
-    if not video:
-        raise AppError(ErrorCodes.NOT_FOUND, "Video not found", status_code=404)
+    video = require_video_scope(VideoRepository(db).get(video_id), scoped_district_ids(db, user))
     settings = get_settings()
     job = ProcessingJob(
         video_id=video.id,
@@ -236,20 +238,19 @@ def create_job(
 
 
 @router.get("/api/jobs", summary="List processing jobs", response_model=list[JobRead])
-def list_jobs(_: RequireReader, db: Session = Depends(get_db)) -> list[JobRead]:
-    return [_job_read(db, job) for job in JobRepository(db).list()]
+def list_jobs(user: RequireReader, db: Session = Depends(get_db)) -> list[JobRead]:
+    return [_job_read(db, job) for job in JobRepository(db).list(district_ids=scoped_district_ids(db, user))]
 
 
 @router.get("/api/jobs/{job_id}", summary="Get job status", response_model=JobRead)
-def get_job(job_id: UUID, _: RequireReader, db: Session = Depends(get_db)) -> JobRead:
-    job = JobRepository(db).get(job_id)
-    if not job:
-        raise AppError(ErrorCodes.NOT_FOUND, "Job not found", status_code=404)
+def get_job(job_id: UUID, user: RequireReader, db: Session = Depends(get_db)) -> JobRead:
+    job = require_job_scope(db, JobRepository(db).get(job_id), scoped_district_ids(db, user))
     return _job_read(db, job)
 
 
 @router.get("/api/jobs/{job_id}/live-frame", summary="Latest annotated live frame JPEG")
-def get_live_frame(job_id: UUID, _: RequireReader) -> FileResponse:
+def get_live_frame(job_id: UUID, user: RequireReader, db: Session = Depends(get_db)) -> FileResponse:
+    require_job_scope(db, JobRepository(db).get(job_id), scoped_district_ids(db, user))
     path = _live_frame_path(job_id)
     if not path.exists():
         raise AppError(ErrorCodes.NOT_FOUND, "Live frame is not available yet", status_code=404)
@@ -261,10 +262,8 @@ def get_live_frame(job_id: UUID, _: RequireReader) -> FileResponse:
 
 
 @router.get("/api/jobs/{job_id}/live-captures", summary="Plate crops captured so far", response_model=LiveCapturesResponse)
-def get_live_captures(job_id: UUID, _: RequireReader, db: Session = Depends(get_db)) -> dict[str, Any]:
-    job = JobRepository(db).get(job_id)
-    if not job:
-        raise AppError(ErrorCodes.NOT_FOUND, "Job not found", status_code=404)
+def get_live_captures(job_id: UUID, user: RequireReader, db: Session = Depends(get_db)) -> dict[str, Any]:
+    job = require_job_scope(db, JobRepository(db).get(job_id), scoped_district_ids(db, user))
     captures_dir = _captures_dir(job_id)
     items: list[dict[str, Any]] = []
     if captures_dir.exists():
@@ -301,8 +300,10 @@ def get_live_captures(job_id: UUID, _: RequireReader, db: Session = Depends(get_
 def get_live_snapshot(
     job_id: UUID,
     snapshot_id: int,
-    _: RequireReader,
+    user: RequireReader,
+    db: Session = Depends(get_db),
 ) -> FileResponse:
+    require_job_scope(db, JobRepository(db).get(job_id), scoped_district_ids(db, user))
     path = _captures_dir(job_id) / f"snapshot_{snapshot_id}.jpg"
     if not path.exists():
         raise AppError(ErrorCodes.NOT_FOUND, "Capture not found", status_code=404)
@@ -318,8 +319,10 @@ def get_live_capture_image(
     job_id: UUID,
     track_id: int,
     kind: str,
-    _: RequireReader,
+    user: RequireReader,
+    db: Session = Depends(get_db),
 ) -> FileResponse:
+    require_job_scope(db, JobRepository(db).get(job_id), scoped_district_ids(db, user))
     if kind not in {"plate", "vehicle", "full"}:
         raise AppError(ErrorCodes.VALIDATION_ERROR, "kind must be plate, vehicle, or full", status_code=400)
     filename = {"plate": f"track_{track_id}.jpg", "vehicle": f"vehicle_{track_id}.jpg", "full": f"full_{track_id}.jpg"}[kind]
@@ -346,22 +349,22 @@ def _require_processing_job(job: ProcessingJob | None) -> ProcessingJob:
 
 
 @router.post("/api/jobs/{job_id}/pause", summary="Pause a running job", response_model=JobRead)
-def pause_job(job_id: UUID, _: RequireOperator, db: Session = Depends(get_db)) -> JobRead:
-    job = _require_processing_job(JobRepository(db).get(job_id))
+def pause_job(job_id: UUID, user: RequireOperator, db: Session = Depends(get_db)) -> JobRead:
+    job = _require_processing_job(require_job_scope(db, JobRepository(db).get(job_id), scoped_district_ids(db, user)))
     request_pause(job.id)
     return _job_read(db, job)
 
 
 @router.post("/api/jobs/{job_id}/resume", summary="Resume a paused job", response_model=JobRead)
-def resume_job(job_id: UUID, _: RequireOperator, db: Session = Depends(get_db)) -> JobRead:
-    job = _require_processing_job(JobRepository(db).get(job_id))
+def resume_job(job_id: UUID, user: RequireOperator, db: Session = Depends(get_db)) -> JobRead:
+    job = _require_processing_job(require_job_scope(db, JobRepository(db).get(job_id), scoped_district_ids(db, user)))
     clear_pause(job.id)
     return _job_read(db, job)
 
 
 @router.post("/api/jobs/{job_id}/capture", summary="Capture the current live frame", response_model=CaptureJobResponse)
-def capture_job(job_id: UUID, _: RequireOperator, db: Session = Depends(get_db)) -> CaptureJobResponse:
-    job = _require_processing_job(JobRepository(db).get(job_id))
+def capture_job(job_id: UUID, user: RequireOperator, db: Session = Depends(get_db)) -> CaptureJobResponse:
+    job = _require_processing_job(require_job_scope(db, JobRepository(db).get(job_id), scoped_district_ids(db, user)))
     dest = _save_live_snapshot(job, db)
     request_capture(job.id)
     wait_capture_result(job.id)
@@ -374,10 +377,8 @@ def capture_job(job_id: UUID, _: RequireOperator, db: Session = Depends(get_db))
 
 
 @router.post("/api/jobs/{job_id}/cancel", summary="Cancel a running job", response_model=JobRead)
-def cancel_job(job_id: UUID, _: RequireOperator, db: Session = Depends(get_db)) -> JobRead:
-    job = JobRepository(db).get(job_id)
-    if not job:
-        raise AppError(ErrorCodes.NOT_FOUND, "Job not found", status_code=404)
+def cancel_job(job_id: UUID, user: RequireOperator, db: Session = Depends(get_db)) -> JobRead:
+    job = require_job_scope(db, JobRepository(db).get(job_id), scoped_district_ids(db, user))
     if job.status in {JobStatus.COMPLETED.value, JobStatus.FAILED.value, JobStatus.CANCELLED.value}:
         raise AppError(ErrorCodes.CONFLICT, f"Job cannot be cancelled from status {job.status}", status_code=409)
     request_cancel(job.id)
@@ -402,10 +403,8 @@ def _wipe_run_results(db: Session, job: ProcessingJob) -> None:
 
 
 @router.post("/api/jobs/{job_id}/retry", summary="Retry a failed or cancelled job", response_model=JobRead)
-def retry_job(job_id: UUID, _: RequireOperator, db: Session = Depends(get_db)) -> JobRead:
-    job = JobRepository(db).get(job_id)
-    if not job:
-        raise AppError(ErrorCodes.NOT_FOUND, "Job not found", status_code=404)
+def retry_job(job_id: UUID, user: RequireOperator, db: Session = Depends(get_db)) -> JobRead:
+    job = require_job_scope(db, JobRepository(db).get(job_id), scoped_district_ids(db, user))
     _wipe_run_results(db, job)
     clear_job_flags(job.id)
     job.processing_run_id = uuid4()

@@ -20,7 +20,7 @@ const NAV: NavItem[] = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
   { href: "/videos", label: "Videos", icon: FolderOpen },
   { href: "/jobs", label: "Processing", icon: Activity },
-  { href: "/users", label: "Personnel", icon: Users, roles: ["admin"] },
+  { href: "/users", label: "Personnel", icon: Users, roles: ["district_master"] },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

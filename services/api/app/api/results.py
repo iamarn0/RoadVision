@@ -16,7 +16,8 @@ from app.schemas.common import (
     PaginatedObservations,
 )
 from app.security.deps import RequireReader
-from packages.db.models import Observation, PlateDetection, ProcessingJob, VehicleTrack
+from app.security.districts import require_job_scope, scoped_district_ids, video_scope_clause
+from packages.db.models import Observation, PlateDetection, ProcessingJob, VehicleTrack, Video
 from packages.overlay_clock import overlay_label
 
 router = APIRouter(tags=["results"])
@@ -60,7 +61,7 @@ def _to_read(
 @router.get("/api/jobs/{job_id}/results", summary="Paginated unique detections", response_model=JobResults)
 def job_results(
     job_id: UUID,
-    _: RequireReader,
+    user: RequireReader,
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
     search: str | None = None,
@@ -71,9 +72,7 @@ def job_results(
 ) -> JobResults:
     from app.api.jobs import _job_read
 
-    job = JobRepository(db).get(job_id)
-    if not job:
-        raise AppError(ErrorCodes.NOT_FOUND, "Job not found", status_code=404)
+    job = require_job_scope(db, JobRepository(db).get(job_id), scoped_district_ids(db, user))
 
     stmt = _detection_query().where(VehicleTrack.processing_job_id == job_id)
     if search:
@@ -115,11 +114,12 @@ def job_results(
 @router.get("/api/jobs/{job_id}/observations", summary="Paginated raw OCR observations", response_model=PaginatedObservations)
 def job_observations(
     job_id: UUID,
-    _: RequireReader,
+    user: RequireReader,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> PaginatedObservations:
+    require_job_scope(db, JobRepository(db).get(job_id), scoped_district_ids(db, user))
     stmt = (
         select(Observation)
         .join(PlateDetection)
@@ -138,7 +138,7 @@ def job_observations(
 
 
 @router.get("/api/plate-detections/{detection_id}", summary="Detection detail with OCR history", response_model=DetectionDetail)
-def detection_detail(detection_id: UUID, _: RequireReader, db: Session = Depends(get_db)) -> DetectionDetail:
+def detection_detail(detection_id: UUID, user: RequireReader, db: Session = Depends(get_db)) -> DetectionDetail:
     row = db.execute(
         _detection_query()
         .options(selectinload(PlateDetection.observations))
@@ -148,6 +148,7 @@ def detection_detail(detection_id: UUID, _: RequireReader, db: Session = Depends
         raise AppError(ErrorCodes.NOT_FOUND, "Detection not found", status_code=404)
     det, track = row
     job = db.get(ProcessingJob, track.processing_job_id)
+    require_job_scope(db, job, scoped_district_ids(db, user))
     base = _to_read(det, track, job.metrics if job else None)
     observations = sorted(det.observations, key=lambda o: o.frame_number)
     return DetectionDetail(
@@ -158,13 +159,19 @@ def detection_detail(detection_id: UUID, _: RequireReader, db: Session = Depends
 
 @router.get("/api/detections", summary="Cross-job unique detections", response_model=PaginatedDetections)
 def all_detections(
-    _: RequireReader,
+    user: RequireReader,
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
     search: str | None = None,
     db: Session = Depends(get_db),
 ) -> PaginatedDetections:
-    stmt = _detection_query().order_by(PlateDetection.created_at.desc())
+    stmt = (
+        _detection_query()
+        .join(ProcessingJob, VehicleTrack.processing_job_id == ProcessingJob.id)
+        .join(Video, ProcessingJob.video_id == Video.id)
+        .where(video_scope_clause(scoped_district_ids(db, user)))
+        .order_by(PlateDetection.created_at.desc())
+    )
     if search:
         stmt = stmt.where(func.upper(PlateDetection.normalized_plate_text).like(f"%{search.upper()}%"))
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0

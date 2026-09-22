@@ -56,6 +56,9 @@ class User(Base):
 
     sessions: Mapped[list[UserSession]] = relationship(back_populates="user", cascade="all, delete-orphan")
     audit_logs: Mapped[list[AuditLog]] = relationship(back_populates="user")
+    districts: Mapped[list[District]] = relationship(
+        secondary="user_districts", back_populates="users"
+    )
 
 
 class UserSession(Base):
@@ -93,6 +96,30 @@ class AuditLog(Base):
     __table_args__ = (Index("ix_audit_logs_created_at", "created_at"),)
 
 
+class District(Base):
+    __tablename__ = "districts"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    slug: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+
+    users: Mapped[list[User]] = relationship(
+        secondary="user_districts", back_populates="districts"
+    )
+    videos: Mapped[list[Video]] = relationship(back_populates="district")
+
+
+class UserDistrict(Base):
+    __tablename__ = "user_districts"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    district_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("districts.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
 class Video(Base):
     __tablename__ = "videos"
 
@@ -113,6 +140,9 @@ class Video(Base):
     created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
+    district_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("districts.id", ondelete="SET NULL"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -125,6 +155,7 @@ class Video(Base):
         back_populates="video", cascade="all, delete-orphan"
     )
     created_by: Mapped[Optional[User]] = relationship(foreign_keys=[created_by_user_id])
+    district: Mapped[Optional[District]] = relationship(back_populates="videos")
 
     __table_args__ = (Index("ix_videos_created_at", "created_at"),)
 

@@ -3,11 +3,12 @@ from uuid import UUID
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
-from app.core.errors import ErrorCodes
+from app.core.errors import AppError, ErrorCodes
 from app.database.session import get_session_factory
 from app.repositories.core import JobRepository
 from app.schemas.common import JobRead
 from app.security.deps import authenticate_websocket
+from app.security.districts import require_job_scope, scoped_district_ids
 
 router = APIRouter()
 
@@ -20,6 +21,11 @@ async def job_progress(websocket: WebSocket, job_id: UUID) -> None:
         user = await authenticate_websocket(websocket, db)
         if user is None:
             await websocket.close(code=4401)
+            return
+        try:
+            require_job_scope(db, JobRepository(db).get(job_id), scoped_district_ids(db, user))
+        except AppError:
+            await websocket.close(code=4404)
             return
     finally:
         db.close()

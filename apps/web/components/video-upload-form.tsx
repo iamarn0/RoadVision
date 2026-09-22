@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { API_BASE, ApiClientError, apiPost, formatBytes, type JobRead, type VideoRead } from "@/lib/api";
 import { Button } from "@/components/ui";
+import { useAuth } from "@/components/auth-provider";
 
 const ALLOWED = ["mp4", "avi", "mov", "mkv", "webm"];
 
@@ -26,11 +27,23 @@ export function VideoUploadForm({ onCancel }: { onCancel: () => void }) {
   const [dragOver, setDragOver] = useState(false);
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const districts = user?.districts ?? [];
+  const [districtId, setDistrictId] = useState("");
+
+  useEffect(() => {
+    if (districts.length === 1) {
+      setDistrictId(districts[0].id);
+    }
+  }, [districts]);
 
   const uploadMutation = useMutation({
     mutationFn: async (selected: File) => {
       const form = new FormData();
       form.append("file", selected);
+      if (districtId) {
+        form.append("district_id", districtId);
+      }
       const response = await fetch(`${API_BASE}/api/videos/upload`, {
         method: "POST",
         body: form,
@@ -98,6 +111,29 @@ export function VideoUploadForm({ onCancel }: { onCancel: () => void }) {
         Submit roadside or CCTV video for vehicle tracking and Indian plate recognition.
       </p>
       <p className="text-sm text-[var(--muted)]">Supported formats: MP4, AVI, MOV, MKV, WEBM</p>
+
+      {districts.length === 0 ? (
+        <p className="text-sm text-[#c45c5c]" role="alert">
+          You are not appointed to a district, so footage cannot be uploaded.
+        </p>
+      ) : (
+        <label className="block text-sm">
+          <span className="text-[var(--muted)]">District</span>
+          <select
+            className="mt-1 w-full rounded-sm border border-[var(--border)] bg-[var(--panel)] px-3 py-2"
+            value={districtId}
+            onChange={(e) => setDistrictId(e.target.value)}
+            disabled={!!uploaded}
+          >
+            {districts.length > 1 ? <option value="">Select district</option> : null}
+            {districts.map((district) => (
+              <option key={district.id} value={district.id}>
+                {district.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
 
       <div
         role="button"
@@ -169,7 +205,7 @@ export function VideoUploadForm({ onCancel }: { onCancel: () => void }) {
       <div className="flex flex-wrap gap-2">
         <Button
           type="button"
-          disabled={!file || uploadMutation.isPending || !!uploaded}
+          disabled={!file || !districtId || uploadMutation.isPending || !!uploaded}
           onClick={() => file && uploadMutation.mutate(file)}
         >
           {uploadMutation.isPending ? "Uploading…" : "Upload"}
