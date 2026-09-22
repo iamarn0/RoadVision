@@ -113,11 +113,12 @@ def _plate_item(job_id: UUID, path: Path, track_id: int, meta: dict[str, Any] | 
     last_seen = float((meta or {}).get("last_seen_seconds") if (meta or {}).get("last_seen_seconds") is not None else first_seen)
     overlay = _clock_label((meta or {}).get("captured_at") or overlay_label(job_metrics, first_seen))
     last_overlay = _clock_label((meta or {}).get("last_seen_overlay") or overlay_label(job_metrics, last_seen))
+    vehicle_only = bool((meta or {}).get("vehicle_only") or (meta or {}).get("kind") == "vehicle")
     return {
         "track_id": track_id,
-        "kind": "plate",
+        "kind": "vehicle" if vehicle_only else "plate",
         "label": f"Track #{track_id}",
-        "plate_url": f"/api/jobs/{job_id}/live-captures/{track_id}/plate",
+        "plate_url": "" if vehicle_only else f"/api/jobs/{job_id}/live-captures/{track_id}/plate",
         "vehicle_url": f"/api/jobs/{job_id}/live-captures/{track_id}/vehicle",
         "full_url": f"/api/jobs/{job_id}/live-captures/{track_id}/full",
         "updated_at": path.stat().st_mtime,
@@ -127,10 +128,10 @@ def _plate_item(job_id: UUID, path: Path, track_id: int, meta: dict[str, Any] | 
         "timestamp": first_seen,
         "timestamp_overlay": overlay,
         "last_seen_overlay": last_overlay,
-        "plate_confidence": (meta or {}).get("plate_confidence"),
+        "plate_confidence": None if vehicle_only else (meta or {}).get("plate_confidence"),
         "vehicle_confidence": (meta or {}).get("vehicle_confidence"),
-        "plate_width": (meta or {}).get("plate_width"),
-        "good_evidence": (meta or {}).get("good_evidence"),
+        "plate_width": None if vehicle_only else (meta or {}).get("plate_width"),
+        "good_evidence": None if vehicle_only else (meta or {}).get("good_evidence"),
     }
 
 
@@ -288,6 +289,18 @@ def get_live_captures(job_id: UUID, user: RequireReader, db: Session = Depends(g
                 continue
             meta = _merge_meta(item_by_key(index, f"plate-{track_id}"), _load_sidecar(captures_dir / f"track_{track_id}.json"))
             items.append(_plate_item(job_id, path, track_id, meta, job_metrics))
+        seen_tracks = {int(item["track_id"]) for item in items if item.get("kind") != "snapshot"}
+        for path in captures_dir.glob("vehicle_*.jpg"):
+            try:
+                track_id = int(path.stem.split("_", 1)[1])
+            except (IndexError, ValueError):
+                continue
+            if track_id in seen_tracks or (captures_dir / f"track_{track_id}.jpg").is_file():
+                continue
+            meta = _merge_meta(item_by_key(index, f"plate-{track_id}"), _load_sidecar(captures_dir / f"track_{track_id}.json"))
+            meta["vehicle_only"] = True
+            meta["kind"] = "vehicle"
+            items.append(_plate_item(job_id, path, track_id, meta, job_metrics))
     items.sort(
         key=lambda item: (
             float(item.get("first_seen_seconds") or 0) or float(item["updated_at"]),
@@ -295,7 +308,7 @@ def get_live_captures(job_id: UUID, user: RequireReader, db: Session = Depends(g
         ),
         reverse=True,
     )
-    return {"job_id": str(job_id), "plates_captured": len([i for i in items if i.get("kind") != "snapshot"]), "items": items}
+    return {"job_id": str(job_id), "plates_captured": len([i for i in items if i.get("kind") == "plate"]), "items": items}
 
 
 @router.get("/api/jobs/{job_id}/live-captures/snapshots/{snapshot_id}", summary="Serve a manual frame snapshot")

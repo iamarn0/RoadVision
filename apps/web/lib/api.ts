@@ -163,7 +163,7 @@ export type LiveCaptureItem = {
   vehicle_url: string;
   full_url?: string;
   updated_at: number;
-  kind?: "plate" | "snapshot";
+  kind?: "plate" | "snapshot" | "vehicle";
   label?: string;
   vehicle_type?: string | null;
   first_seen_seconds?: number;

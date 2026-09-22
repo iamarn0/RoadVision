@@ -22,6 +22,10 @@ function isSnapshot(item: LiveCaptureItem) {
   return item.kind === "snapshot" || (item.plate_url?.includes("/snapshots/") ?? false);
 }
 
+function isVehicleOnly(item: LiveCaptureItem) {
+  return item.kind === "vehicle";
+}
+
 function captureSrc(item: LiveCaptureItem, kind: "plate" | "vehicle" | "full" = "plate") {
   const path =
     kind === "full" ? item.full_url || item.vehicle_url || item.plate_url : kind === "vehicle" ? item.vehicle_url : item.plate_url;
@@ -84,12 +88,16 @@ function CapturesTable({
           {rows.map((cap) => (
             <tr key={`${cap.kind ?? "plate"}-${cap.track_id}-${cap.updated_at}`} className="border-b border-[var(--border)]">
               <td className="px-2 py-2">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={captureSrc(cap, "plate")}
-                  alt={isSnapshot(cap) ? "Snapshot" : `Plate ${cap.track_id}`}
-                  className="h-10 w-20 bg-black object-contain"
-                />
+                {isVehicleOnly(cap) ? (
+                  <span className="text-[var(--muted)]">No plate</span>
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={captureSrc(cap, "plate")}
+                    alt={isSnapshot(cap) ? "Snapshot" : `Plate ${cap.track_id}`}
+                    className="h-10 w-20 bg-black object-contain"
+                  />
+                )}
               </td>
               <td className="px-2 py-2">
                 {isSnapshot(cap) ? (
@@ -101,7 +109,9 @@ function CapturesTable({
               </td>
               <td className="px-2 py-2">
                 {isSnapshot(cap) ? "Snapshot" : cap.vehicle_type || "—"}
-                {cap.good_evidence === false ? (
+                {isVehicleOnly(cap) ? (
+                  <span className="mt-1 block text-xs text-[var(--muted)]">No plate</span>
+                ) : cap.good_evidence === false ? (
                   <span className="mt-1 block text-xs text-[#c45c5c]">Low detail</span>
                 ) : null}
               </td>
@@ -154,9 +164,17 @@ export default function JobDetailPage() {
   const liveCaptures = useQuery({
     queryKey: ["live-captures", jobId],
     queryFn: () => apiGet<LiveCapturesResponse>(`/api/jobs/${jobId}/live-captures`),
-    enabled: active || job.data?.status === "completed",
+    enabled: active || job.data?.status === "completed" || job.data?.status === "cancelled",
     refetchInterval: active ? (paused ? 800 : 600) : false,
   });
+
+  // Polling stops once the job leaves the live states. Refetch so vehicles
+  // still in frame on the last second are included after they are published.
+  useEffect(() => {
+    const status = job.data?.status;
+    if (status !== "completed" && status !== "cancelled" && status !== "finalizing") return;
+    void queryClient.invalidateQueries({ queryKey: ["live-captures", jobId] });
+  }, [job.data?.status, jobId, queryClient]);
 
   const liveReady = !!job.data?.live_frame_available;
 
@@ -598,7 +616,7 @@ export default function JobDetailPage() {
             <div className="grid gap-2 text-sm md:grid-cols-2">
               <p>
                 <span className="text-[var(--muted)]">Status: </span>
-                {isSnapshot(previewCap) ? "Snapshot" : previewCap.good_evidence === false ? "Low detail" : "Captured"}
+                {isSnapshot(previewCap) ? "Snapshot" : isVehicleOnly(previewCap) ? "No plate" : previewCap.good_evidence === false ? "Low detail" : "Captured"}
               </p>
               <p>
                 <span className="text-[var(--muted)]">Confidence: </span>
@@ -651,15 +669,22 @@ export default function JobDetailPage() {
                     className="mx-auto max-h-[64vh] w-auto max-w-full bg-black object-contain"
                   />
                 </div>
-                <div>
-                  <p className="mb-2 text-xs uppercase text-[var(--muted)]">Plate</p>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={captureSrc(previewCap, "plate")}
-                    alt="Plate crop"
-                    className="mx-auto max-h-[32vh] w-full max-w-full bg-black object-contain"
-                  />
-                </div>
+                {isVehicleOnly(previewCap) ? (
+                  <div>
+                    <p className="mb-2 text-xs uppercase text-[var(--muted)]">Plate</p>
+                    <p className="text-sm text-[var(--muted)]">No plate was read before the video ended.</p>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="mb-2 text-xs uppercase text-[var(--muted)]">Plate</p>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={captureSrc(previewCap, "plate")}
+                      alt="Plate crop"
+                      className="mx-auto max-h-[32vh] w-full max-w-full bg-black object-contain"
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>

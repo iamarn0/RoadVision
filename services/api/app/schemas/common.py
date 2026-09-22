@@ -76,7 +76,7 @@ class JobRead(ORMModel):
 
 class LiveCaptureItem(BaseModel):
     track_id: int
-    plate_url: str
+    plate_url: str = ""
     vehicle_url: str
     full_url: Optional[str] = None
     updated_at: float

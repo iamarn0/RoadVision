@@ -20,6 +20,8 @@ from app.pipeline.candidates import PlateCandidateStore
 from app.pipeline.capture_merge import find_same_passage
 from app.pipeline.diagnostics import video_summary, write_diagnostics
 from app.pipeline.plate_search import (
+    MIN_PLATE_SEARCH_AREA,
+    MIN_PLATE_SEARCH_WIDTH,
     drop_caption_plates,
     search_plates_in_vehicles,
     vehicle_capture_pads,
@@ -254,6 +256,9 @@ def _sync_captures_index(
 
 
 PUBLISH_UNSEEN_SECONDS = 0.5
+# A vehicle still inside the frame in the last second of the file never goes
+# unseen, so it would otherwise never be written to the capture list.
+END_STILL_VISIBLE_SECONDS = 1.0
 
 
 def capture_is_due_to_publish(
@@ -299,14 +304,17 @@ def _publish_track_capture(
     if capture.get("published"):
         return False
     plate = capture.get("image_plate")
-    if plate is None or getattr(plate, "size", 0) == 0:
-        capture["published"] = True
-        return False
     vehicle_img = capture.get("image_vehicle")
     full = capture.get("image_full")
-    save_jpeg(captures_dir / f"track_{capture_id}.jpg", plate, JPEG_PLATE_QUALITY)
-    save_png(captures_dir / f"track_{capture_id}.png", plate)
-    if vehicle_img is not None and getattr(vehicle_img, "size", 0) > 0:
+    has_plate = plate is not None and getattr(plate, "size", 0) > 0
+    has_vehicle = vehicle_img is not None and getattr(vehicle_img, "size", 0) > 0
+    if not has_plate and not has_vehicle:
+        capture["published"] = True
+        return False
+    if has_plate:
+        save_jpeg(captures_dir / f"track_{capture_id}.jpg", plate, JPEG_PLATE_QUALITY)
+        save_png(captures_dir / f"track_{capture_id}.png", plate)
+    if has_vehicle:
         save_jpeg(captures_dir / f"vehicle_{capture_id}.jpg", vehicle_img, JPEG_EVIDENCE_QUALITY)
     if full is not None and getattr(full, "size", 0) > 0:
         save_jpeg(captures_dir / f"full_{capture_id}.jpg", full, JPEG_EVIDENCE_QUALITY)
@@ -327,6 +335,9 @@ def _publish_track_capture(
         plate_width=capture.get("plate_width"),
         good_evidence=capture.get("good_evidence"),
     )
+    if capture.get("vehicle_only"):
+        sidecar["kind"] = "vehicle"
+        sidecar["vehicle_only"] = True
     (captures_dir / f"track_{capture_id}.json").write_text(json.dumps(sidecar), encoding="utf-8")
     capture["published"] = True
     return True
@@ -407,6 +418,42 @@ def _publish_all_pending(
         if _publish_track_capture(captures_dir, capture_id, capture, overlay_clock):
             written += 1
     return written
+
+
+def _queue_vehicles_still_in_frame(
+    best_by_track: dict[int, dict[str, Any]],
+    vehicle_meta: dict[int, dict[str, Any]],
+    open_crops: dict[int, dict[str, Any]],
+    final_index: int,
+    source_fps: float,
+) -> None:
+    """Add a list row for vehicles still in frame when the clip ends, even with no plate."""
+    if final_index < 0:
+        return
+    fps = max(float(source_fps or 0.0), 1.0)
+    for track_id, crop_info in open_crops.items():
+        if _capture_for_vehicle(best_by_track, track_id)[1] is not None:
+            continue
+        image = crop_info.get("image")
+        if image is None or getattr(image, "size", 0) == 0:
+            continue
+        meta = vehicle_meta.get(track_id) or {}
+        last = int(meta.get("last_frame") if meta.get("last_frame") is not None else crop_info.get("frame") or 0)
+        if (final_index - last) / fps > END_STILL_VISIBLE_SECONDS:
+            continue
+        best_by_track[track_id] = {
+            "image_vehicle": image,
+            "image_plate": None,
+            "first_seen": float(meta.get("first_seen") or 0.0),
+            "last_seen": float(meta.get("last_seen") or meta.get("first_seen") or 0.0),
+            "vehicle_type": meta.get("type"),
+            "vehicle_confidence": meta.get("conf"),
+            "published": False,
+            "vehicle_only": True,
+            "source_ids": {track_id},
+            "active_tid": track_id,
+            "best_frame": last,
+        }
 
 
 def _handle_manual_capture(job_id: str, captures_dir: Path, last_associated: list[dict[str, Any]]) -> None:
@@ -495,8 +542,17 @@ def _flush_plate_outputs(
     meta: Any,
     source_fps: float,
     anpr_debug: bool,
+    open_crops: dict[int, dict[str, Any]] | None = None,
+    final_index: int = -1,
 ) -> dict[str, Any]:
     """Publish remaining crops and write diagnostics. Safe to call on cancel."""
+    _queue_vehicles_still_in_frame(
+        best_by_track,
+        vehicle_meta,
+        open_crops or {},
+        final_index,
+        source_fps,
+    )
     _apply_store_winners(best_by_track, candidate_store)
     _publish_all_pending(captures_dir, best_by_track, overlay_clock)
     _sync_captures_index(captures_dir, best_by_track, overlay_clock)
@@ -692,6 +748,8 @@ def process_job(db: Session, job_id: UUID) -> None:
     last_full_plate_frame = -10_000
     index_dirty = 0
     index_flushed = False
+    open_crops: dict[int, dict[str, Any]] = {}
+    final_index = -1
 
     try:
         try:
@@ -723,6 +781,7 @@ def process_job(db: Session, job_id: UUID) -> None:
         )
 
         for frame in source.frames():
+            final_index = frame.index
             if _cancelled(str(job.id)):
                 job.status = JobStatus.CANCELLED.value
                 job.completed_at = datetime.now(UTC)
@@ -737,6 +796,8 @@ def process_job(db: Session, job_id: UUID) -> None:
                     meta=meta,
                     source_fps=source_fps,
                     anpr_debug=anpr_debug,
+                    open_crops=open_crops,
+                    final_index=final_index,
                 )
                 db.commit()
                 return
@@ -759,6 +820,8 @@ def process_job(db: Session, job_id: UUID) -> None:
                         meta=meta,
                         source_fps=source_fps,
                         anpr_debug=anpr_debug,
+                        open_crops=open_crops,
+                        final_index=final_index,
                     )
                     db.commit()
                     return
@@ -836,6 +899,16 @@ def process_job(db: Session, job_id: UUID) -> None:
                 info["conf"] = max(info["conf"], v.detection.confidence)
                 info["type"] = v.detection.class_name
                 info["frame_count"] = int(info.get("frame_count") or 0) + 1
+                if _capture_for_vehicle(best_by_track, v.track_id)[1] is None:
+                    box = v.detection.bounding_box
+                    if box.area >= MIN_PLATE_SEARCH_AREA and box.width >= MIN_PLATE_SEARCH_WIDTH:
+                        vx1, vy1, vx2, vy2 = box.clip(meta.width, meta.height).as_int()
+                        pad_l, pad_t, pad_r, pad_b = vehicle_capture_pads(v.detection.class_name)
+                        vehicle_img, _, _ = crop_box_asymmetric(
+                            frame.image, vx1, vy1, vx2, vy2, pad_l, pad_t, pad_r, pad_b
+                        )
+                        if vehicle_img.size:
+                            open_crops[v.track_id] = {"image": vehicle_img, "frame": frame.index}
 
             plates: list = []
             associated: list = []
@@ -981,6 +1054,8 @@ def process_job(db: Session, job_id: UUID) -> None:
                             "active_tid": vehicle.track_id,
                         },
                     )
+                    open_crops.pop(capture_id, None)
+                    open_crops.pop(vehicle.track_id, None)
 
             _apply_store_winners(best_by_track, candidate_store)
             published_now = _publish_due_captures(
@@ -1081,6 +1156,8 @@ def process_job(db: Session, job_id: UUID) -> None:
             meta=meta,
             source_fps=source_fps,
             anpr_debug=anpr_debug,
+            open_crops=open_crops,
+            final_index=final_index,
         )
         db.commit()
         plate_stats = diag_summary.get("plates") or {}
@@ -1103,7 +1180,7 @@ def process_job(db: Session, job_id: UUID) -> None:
                 "average_inference_latency": sum(inference_times) / len(inference_times) if inference_times else None,
                 "vehicle_detection_count": len(vehicle_meta),
                 "unique_vehicle_count": len(vehicle_meta),
-                "plate_capture_count": len(best_by_track),
+                "plate_capture_count": sum(1 for cap in best_by_track.values() if not cap.get("vehicle_only")),
                 "failed_frames": failed_frames,
                 "peak_gpu_memory": peak_gpu,
                 "ocr_enabled": False,
@@ -1280,5 +1357,5 @@ def _persist(
         )
     job.metrics = metrics
     job.vehicles_detected = len(vehicle_meta)
-    job.plates_detected = len(best_by_track)
+    job.plates_detected = sum(1 for cap in best_by_track.values() if not cap.get("vehicle_only"))
     db.flush()

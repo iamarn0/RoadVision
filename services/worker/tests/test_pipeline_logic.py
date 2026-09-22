@@ -516,6 +516,56 @@ def test_capture_publishes_after_unseen_delay() -> None:
     assert capture_is_due_to_publish({"published": True, "last_seen": 1.0}, visible=False, now_ts=10.0) is False
 
 
+def test_end_of_video_publishes_vehicle_still_in_frame(tmp_path) -> None:
+    import numpy as np
+    from app.pipeline.runner import (
+        _publish_all_pending,
+        _queue_vehicles_still_in_frame,
+        capture_is_due_to_publish,
+    )
+
+    img = np.zeros((20, 40, 3), dtype=np.uint8)
+    capture = {
+        "published": False,
+        "image_plate": img,
+        "image_vehicle": img,
+        "image_full": img,
+        "first_seen": 8.0,
+        "last_seen": 10.0,
+        "vehicle_type": "car",
+        "plate_confidence": 0.8,
+        "vehicle_confidence": 0.9,
+    }
+    assert capture_is_due_to_publish(capture, visible=True, now_ts=10.0) is False
+    assert _publish_all_pending(tmp_path, {7: capture}, None) == 1
+    assert (tmp_path / "track_7.jpg").is_file()
+    assert (tmp_path / "vehicle_7.jpg").is_file()
+    assert (tmp_path / "full_7.jpg").is_file()
+    assert capture["published"] is True
+
+    still = tmp_path / "still"
+    still.mkdir()
+    vehicle = np.zeros((30, 50, 3), dtype=np.uint8)
+    best: dict = {}
+    meta = {
+        9: {"type": "car", "first_seen": 2.0, "last_seen": 34.8, "last_frame": 870, "conf": 0.8},
+        5: {"type": "car", "first_seen": 1.0, "last_seen": 17.0, "last_frame": 435, "conf": 0.7},
+    }
+    crops = {
+        9: {"image": vehicle, "frame": 870},
+        5: {"image": vehicle, "frame": 435},
+    }
+    _queue_vehicles_still_in_frame(best, meta, crops, final_index=873, source_fps=25.0)
+    assert 9 in best
+    assert 5 not in best
+    assert best[9]["vehicle_only"] is True
+    assert _publish_all_pending(still, best, None) == 1
+    assert (still / "vehicle_9.jpg").is_file()
+    assert not (still / "track_9.jpg").exists()
+    sidecar = (still / "track_9.json").read_text(encoding="utf-8")
+    assert '"kind": "vehicle"' in sidecar
+
+
 def test_publish_track_capture_writes_once(tmp_path) -> None:
     import numpy as np
     from app.pipeline.runner import _publish_track_capture
