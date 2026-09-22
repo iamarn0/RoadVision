@@ -50,7 +50,8 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live')"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 12
+      start_period: 40s
 
   worker:
     build:
