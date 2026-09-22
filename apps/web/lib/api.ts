@@ -173,6 +173,8 @@ export type LiveCaptureItem = {
   last_seen_overlay?: string | null;
   plate_confidence?: number | null;
   vehicle_confidence?: number | null;
+  plate_width?: number | null;
+  good_evidence?: boolean | null;
 };
 
 export type CaptureJobResponse = JobRead & {

@@ -116,8 +116,8 @@ def test_plausible_plate_rejects_tiny_night_crop() -> None:
     from app.preprocessing.plates import is_plausible_plate_crop
 
     rng = np.random.default_rng(0)
-    img = rng.integers(40, 110, (16, 32, 3), dtype=np.uint8)
-    ok, _, _ = is_plausible_plate_crop(img, 32, 16, 0.9, night=True)
+    img = rng.integers(40, 110, (8, 18, 3), dtype=np.uint8)
+    ok, _, _ = is_plausible_plate_crop(img, 18, 8, 0.9, night=True)
     assert ok is False
 
 
@@ -183,7 +183,10 @@ def test_day_plate_rejects_blurry_or_tiny_crop() -> None:
     blur = cv2.GaussianBlur(sharp, (21, 21), 0)
     ok, _, _ = has_plate_evidence(blur, 140, 36, 0.8, dark=False, frame_width=1920)
     assert ok is False
-    ok, _, _ = has_plate_evidence(sharp, 48, 16, 0.9, dark=False, frame_width=1920)
+    tiny = np.full((8, 20, 3), 230, dtype=np.uint8)
+    for x in range(2, 18, 4):
+        tiny[2:6, x : x + 1] = 15
+    ok, _, _ = has_plate_evidence(tiny, 20, 8, 0.9, dark=False, frame_width=1920)
     assert ok is False
 
     small = np.full((18, 42, 3), 230, dtype=np.uint8)
@@ -203,7 +206,7 @@ def test_high_resolution_rejects_motion_blur() -> None:
         sharp[12:68, x : x + 6] = 12
     ok, _, _ = has_plate_evidence(sharp, 280, 80, 0.85, dark=False, frame_width=2500)
     assert ok is True
-    smeared = cv2.GaussianBlur(sharp, (15, 15), 0)
+    smeared = cv2.GaussianBlur(sharp, (41, 41), 0)
     ok, _, _ = has_plate_evidence(smeared, 280, 80, 0.85, dark=False, frame_width=2500)
     assert ok is False
 
@@ -285,6 +288,9 @@ def test_plate_index_item_includes_overlay_and_confidence() -> None:
     assert item["captured_at"] == "16-09-2026 09:07:48 PM"
     assert item["last_seen_overlay"] == "16-09-2026 09:07:50 PM"
     assert item["plate_confidence"] == 0.81
+    low = plate_index_item(3, 0.0, 1.0, "car", None, plate_width=60)
+    assert low["good_evidence"] is False
+    assert low["plate_width"] == 60.0
 
 
 def _plate_bars() -> "object":
@@ -372,12 +378,12 @@ def _candidate(quality: float, frame: int, tag: str) -> dict:
     }
 
 
-def test_plate_frame_quality_prefers_sharp_over_large_blur() -> None:
+def test_plate_frame_quality_prefers_larger_readable_over_tiny_noise() -> None:
     from app.preprocessing.plates import plate_frame_quality
 
-    sharp_small = plate_frame_quality(sharp=280, plate_area=5000, plate_confidence=0.8, contrast=30)
-    blur_large = plate_frame_quality(sharp=25, plate_area=18000, plate_confidence=0.8, contrast=30)
-    assert sharp_small > blur_large
+    readable = plate_frame_quality(sharp=45, plate_area=182 * 53, plate_confidence=0.6, contrast=28)
+    tiny_noisy = plate_frame_quality(sharp=300, plate_area=40 * 14, plate_confidence=0.9, contrast=35)
+    assert readable > tiny_noisy
 
 
 def test_consider_plate_candidate_keeps_highest_quality() -> None:
@@ -406,7 +412,58 @@ def test_vehicle_capture_pads_keep_bumper_context() -> None:
     assert car[0] == VEHICLE_CROP_PAD
     assert car[3] > car[1]
     assert moto[3] > car[3]
-    assert ROI_IMAGE_SIZE == 640
+    assert ROI_IMAGE_SIZE == 960
+
+
+def test_diagnostics_writes_json_not_info_png_when_enabled(tmp_path) -> None:
+    import numpy as np
+    from app.pipeline.candidates import PlateCandidateStore
+    from app.pipeline.diagnostics import video_summary, write_diagnostics
+    from app.preprocessing.quality import DEFAULT_QUALITY
+
+    store = PlateCandidateStore(top_n=4)
+    plate = np.full((20, 60, 3), 90, dtype=np.uint8)
+    store.record_detection(
+        127,
+        width=182,
+        height=53,
+        accepted=True,
+        candidate={
+            "frame_number": 530,
+            "timestamp": 21.2,
+            "plate_bbox": {"x1": 1, "y1": 2, "x2": 183, "y2": 55},
+            "plate_width": 182,
+            "plate_height": 53,
+            "plate_area": 182 * 53,
+            "plate_detection_confidence": 0.8,
+            "sharpness_score": 40.0,
+            "contrast_score": 22.0,
+            "brightness_score": 140.0,
+            "saturation_ratio": 0.01,
+            "exposure_score": 0.9,
+            "geometry_score": 0.95,
+            "total_score": 0.7,
+            "image_plate": plate,
+        },
+    )
+    summary = video_summary(
+        width=2688,
+        height=1520,
+        fps=25.0,
+        duration=180.0,
+        frame_count=4500,
+        vehicle_meta={127: {"first_frame": 400, "last_frame": 649, "frame_count": 250, "type": "bus"}},
+        store=store,
+        captures={127: {"best_frame": 530}},
+        config=DEFAULT_QUALITY,
+    )
+    dest = tmp_path / "diagnostics"
+    write_diagnostics(dest, summary, store, save_candidate_png=True)
+    assert (dest / "summary.json").is_file()
+    assert (dest / "track_127.json").is_file()
+    assert (dest / "track_127" / "frame_530.png").is_file()
+    assert summary["plates"]["vehicles_with_usable_quality_candidate"] == 1
+    assert "Vehicle ID: 127" in (dest / "track_127.json").read_text(encoding="utf-8")
 
 
 def test_save_jpeg_writes_quality_param(tmp_path) -> None:
@@ -419,6 +476,34 @@ def test_save_jpeg_writes_quality_param(tmp_path) -> None:
     save_jpeg(dest, img, JPEG_PLATE_QUALITY)
     assert dest.is_file()
     assert dest.stat().st_size > 0
+
+
+def test_apply_store_winners_uses_buffer_crop() -> None:
+    import numpy as np
+    from app.pipeline.candidates import PlateCandidateStore
+    from app.pipeline.runner import _apply_store_winners
+
+    store = PlateCandidateStore(top_n=5)
+    winner_img = np.full((16, 48, 3), 200, dtype=np.uint8)
+    other = np.full((16, 48, 3), 10, dtype=np.uint8)
+    store.record_detection(
+        4,
+        width=48,
+        height=16,
+        accepted=True,
+        candidate={"frame_number": 12, "total_score": 0.2, "image_plate": other},
+    )
+    store.record_detection(
+        4,
+        width=90,
+        height=28,
+        accepted=True,
+        candidate={"frame_number": 40, "total_score": 0.9, "image_plate": winner_img, "plate_bbox": {"x1": 1}},
+    )
+    capture = {"image_plate": other, "best_frame": 12, "quality": 0.2}
+    _apply_store_winners({4: capture}, store)
+    assert capture["best_frame"] == 40
+    assert capture["image_plate"] is winner_img
 
 
 def test_capture_publishes_after_unseen_delay() -> None:
@@ -452,6 +537,7 @@ def test_publish_track_capture_writes_once(tmp_path) -> None:
     }
     assert _publish_track_capture(tmp_path, 3, capture, None) is True
     assert (tmp_path / "track_3.jpg").is_file()
+    assert (tmp_path / "track_3.png").is_file()
     assert (tmp_path / "vehicle_3.jpg").is_file()
     assert (tmp_path / "full_3.jpg").is_file()
     assert (tmp_path / "track_3_alt1.jpg").is_file()
@@ -485,16 +571,35 @@ def test_two_wheelers_map_to_motorcycle() -> None:
         assert VEHICLE_CLASS_MAP[name] == "motorcycle"
 
 
-def test_playback_strides_keep_bikes_trackable() -> None:
+def test_playback_strides_sample_five_to_eight_fps() -> None:
     from app.pipeline.runner import _playback_strides, _preview_size
 
-    preview, vehicle, plate, preview_fps = _playback_strides(100)
-    assert preview == 4
-    assert vehicle == 2
-    assert plate == 2 or plate == 3
-    assert preview_fps == 25
-    assert _playback_strides(25)[0] == 1
+    preview, vehicle, plate, preview_fps = _playback_strides(25)
+    assert preview == vehicle == plate == 3
+    assert 7.5 <= preview_fps <= 8.5
+    behind_preview, behind_vehicle, behind_plate, behind_fps = _playback_strides(25, behind=True)
+    assert behind_preview == behind_vehicle == behind_plate == 5
+    assert behind_fps == 5
+    fast_preview, fast_vehicle, fast_plate, fast_fps = _playback_strides(100)
+    assert fast_preview == fast_vehicle == fast_plate
+    assert 7.0 <= fast_fps <= 9.0
     assert _preview_size(2500, 1400)[0] == 1280
+
+
+def test_consider_prefers_readable_width_over_sharper_tiny_crop() -> None:
+    from app.preprocessing.plates import consider_plate_candidate
+
+    tiny = _candidate(0.9, 1, "a")
+    tiny["plate_width"] = 40
+    tiny["good_evidence"] = False
+    wide = _candidate(0.4, 5, "b")
+    wide["plate_width"] = 120
+    wide["good_evidence"] = True
+    capture = consider_plate_candidate(None, tiny)
+    assert capture["good_evidence"] is False
+    capture = consider_plate_candidate(capture, wide)
+    assert capture["best_frame"] == 5
+    assert capture["good_evidence"] is True
 
 
 def test_public_error_includes_exception_type() -> None:

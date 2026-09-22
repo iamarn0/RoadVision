@@ -129,6 +129,8 @@ def _plate_item(job_id: UUID, path: Path, track_id: int, meta: dict[str, Any] | 
         "last_seen_overlay": last_overlay,
         "plate_confidence": (meta or {}).get("plate_confidence"),
         "vehicle_confidence": (meta or {}).get("vehicle_confidence"),
+        "plate_width": (meta or {}).get("plate_width"),
+        "good_evidence": (meta or {}).get("good_evidence"),
     }
 
 

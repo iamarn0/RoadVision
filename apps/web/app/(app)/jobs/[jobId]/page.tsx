@@ -99,7 +99,12 @@ function CapturesTable({
                   <img src={captureSrc(cap, "vehicle")} alt={`Vehicle ${cap.track_id}`} className="h-10 w-20 bg-black object-contain" />
                 )}
               </td>
-              <td className="px-2 py-2">{isSnapshot(cap) ? "Snapshot" : cap.vehicle_type || "—"}</td>
+              <td className="px-2 py-2">
+                {isSnapshot(cap) ? "Snapshot" : cap.vehicle_type || "—"}
+                {cap.good_evidence === false ? (
+                  <span className="mt-1 block text-xs text-[#c45c5c]">Low detail</span>
+                ) : null}
+              </td>
               <td className="px-2 py-2">{isSnapshot(cap) ? `S#${cap.track_id}` : `#${cap.track_id}`}</td>
               <td className="whitespace-nowrap px-2 py-2">{captureTimeLabel(cap)}</td>
               <td className="px-2 py-2">
@@ -593,7 +598,7 @@ export default function JobDetailPage() {
             <div className="grid gap-2 text-sm md:grid-cols-2">
               <p>
                 <span className="text-[var(--muted)]">Status: </span>
-                {isSnapshot(previewCap) ? "Snapshot" : "Captured"}
+                {isSnapshot(previewCap) ? "Snapshot" : previewCap.good_evidence === false ? "Low detail" : "Captured"}
               </p>
               <p>
                 <span className="text-[var(--muted)]">Confidence: </span>
@@ -611,6 +616,11 @@ export default function JobDetailPage() {
                 <span className="text-[var(--muted)]">Seen: </span>
                 {captureTimeLabel(previewCap)}
               </p>
+              {previewCap.good_evidence === false ? (
+                <p className="md:col-span-2 text-sm text-[#c45c5c]">
+                  Plate is {previewCap.plate_width ? `${Math.round(previewCap.plate_width)} px wide` : "under 75 px wide"}. Characters are not fully resolved.
+                </p>
+              ) : null}
             </div>
             {isSnapshot(previewCap) ? (
               <div>

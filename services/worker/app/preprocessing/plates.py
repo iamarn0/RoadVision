@@ -21,6 +21,15 @@ def save_jpeg(path: Path | str, image: np.ndarray, quality: int = JPEG_EVIDENCE_
     cv2.imwrite(str(dest), image, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
 
 
+def save_png(path: Path | str, image: np.ndarray) -> None:
+    """Lossless copy of the native crop. Used for debug and the evidence plate."""
+    import cv2
+
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(dest), image)
+
+
 def preprocess_plate(image: np.ndarray, variant: str = "default") -> np.ndarray:
     import cv2
 
@@ -170,40 +179,28 @@ def is_hard_false_positive(
         return True
     if box_width < 12 or box_height < 6:
         return True
-    sharp, contrast, mean, edge_density, components = plate_structure_metrics(image)
+    sharp, contrast, mean, _edge_density, components = plate_structure_metrics(image)
     if mean > 220 and contrast < 28 and aspect < 1.4:
         return True
     if mean < 12 and contrast < 8:
         return True
     if components == 0 and contrast < 14 and sharp < 12:
         return True
-    if edge_density > 0.20 and components > 6:
-        return True
     return False
 
 
 def readable_plate_limits(frame_width: float, dark: bool = False) -> tuple[float, float, float]:
-    """Minimum width, height, and sharpness that can exist in this picture.
+    """Minimum width, height, and sharpness for a crop that can still be read.
 
-    704x576 and 848x478 clips, including WhatsApp compressions, do not contain an
-    80px-wide plate until a vehicle is on top of the camera. Scale the bar with the
-    frame and keep the sharpness floor low enough that compression does not wipe
-    every crop.
+    Limits come from PlateQualityConfig. Frame width is kept for callers but no
+    longer raises the Laplacian floor on 2688px video (that used to delete
+    readable H.264 plates).
     """
-    width = float(frame_width) if frame_width and frame_width > 0 else 1280.0
-    if dark:
-        min_w = max(16.0, min(40.0, width * 0.025))
-        return min_w, max(8.0, min_w / 5.0), 8.0
-    min_w = max(26.0, min(56.0, width * 0.040))
-    min_h = max(10.0, min(16.0, min_w / 4.5))
-    if width >= 2000:
-        # High-resolution frames make a smeared plate look large. Require real edges.
-        min_sharp = 70.0
-    elif width >= 1200:
-        min_sharp = 16.0
-    else:
-        min_sharp = 10.0
-    return min_w, min_h, min_sharp
+    from app.preprocessing.quality import DEFAULT_QUALITY
+
+    _ = frame_width
+    min_sharp = 6.0 if dark else DEFAULT_QUALITY.min_sharpness
+    return DEFAULT_QUALITY.min_width_px, DEFAULT_QUALITY.min_height_px, min_sharp
 
 
 def has_plate_evidence(
@@ -213,35 +210,21 @@ def has_plate_evidence(
     plate_confidence: float,
     dark: bool = False,
     frame_width: float = 0.0,
+    config: Any | None = None,
 ) -> tuple[bool, float, float]:
     """Keep a crop only when it has enough plate information. Does not force a save to raise counts."""
-    if is_hard_false_positive(image, box_width, box_height, plate_confidence):
-        return False, 0.0, 0.0
-    sharp, contrast, _mean, edge_density, components = plate_structure_metrics(image)
-    min_w, min_h, min_sharp = readable_plate_limits(frame_width, dark)
-    if box_width < min_w or box_height < min_h or sharp < min_sharp:
-        return False, 0.0, sharp
-    min_edge = 0.022 if dark else 0.03
-    min_contrast = 10.0 if dark else 14.0
-    structured = components >= 2 or (
-        components >= 1 and (box_width / max(box_height, 1.0)) >= 1.8 and contrast >= min_contrast
-    )
-    if not structured:
-        return False, 0.0, sharp
-    if edge_density < min_edge and contrast < min_contrast and sharp < min_sharp:
-        return False, 0.0, sharp
-    score = evidence_score(
+    from app.preprocessing.quality import evaluate_plate_crop
+
+    _ = frame_width
+    metrics = evaluate_plate_crop(
+        image,
+        box_width,
+        box_height,
         plate_confidence,
-        box_width * box_height,
-        sharp,
-        contrast,
-        edge_density,
-        components,
+        config=config,
+        dark=dark,
     )
-    min_score = 0.26 if dark else 0.30
-    if score < min_score:
-        return False, score, sharp
-    return True, score, sharp
+    return metrics.accepted, metrics.total_score, metrics.sharpness_score
 
 
 def is_plausible_plate_crop(
@@ -258,9 +241,6 @@ def is_plausible_plate_crop(
     return True, sharp, contrast
 
 
-SHARPNESS_CAP = 400.0
-AREA_CAP = 20000.0
-CONTRAST_CAP = 40.0
 MAX_RUNNERS_UP = 2
 
 
@@ -269,18 +249,37 @@ def plate_frame_quality(
     plate_area: float,
     plate_confidence: float,
     contrast: float,
+    brightness: float = 128.0,
+    sat_ratio: float = 0.0,
+    width: float | None = None,
+    height: float | None = None,
 ) -> float:
-    """Rank a readable plate crop. A sharp plate beats a larger motion-smeared one."""
-    return (
-        0.82 * min(1.0, float(sharp) / SHARPNESS_CAP)
-        + 0.08 * min(1.0, float(plate_area) / AREA_CAP)
-        + 0.07 * min(1.0, float(plate_confidence))
-        + 0.03 * min(1.0, float(contrast) / CONTRAST_CAP)
+    """Rank a readable plate crop using the configurable image-quality weights."""
+    from app.preprocessing.quality import IDEAL_ASPECT, rank_score
+
+    if width is None or height is None:
+        height = float((max(float(plate_area), 1.0) / IDEAL_ASPECT) ** 0.5)
+        width = height * IDEAL_ASPECT
+    total, _parts = rank_score(
+        width=float(width),
+        height=float(height),
+        sharpness=float(sharp),
+        contrast=float(contrast),
+        brightness=float(brightness),
+        sat_ratio=float(sat_ratio),
+        detector_confidence=float(plate_confidence),
     )
+    return total
 
 
 def _quality_of(item: dict[str, Any]) -> float:
     return float(item.get("quality") or item.get("score") or 0.0)
+
+
+def _good_evidence(item: dict[str, Any]) -> bool:
+    from app.preprocessing.quality import is_good_plate_evidence
+
+    return is_good_plate_evidence(item)
 
 
 def _winner_fields(candidate: dict[str, Any]) -> dict[str, Any]:
@@ -294,6 +293,12 @@ def _winner_fields(candidate: dict[str, Any]) -> dict[str, Any]:
         "sharp": candidate.get("sharp"),
         "plate_area": candidate.get("plate_area"),
         "contrast": candidate.get("contrast"),
+        "brightness": candidate.get("brightness"),
+        "saturation_ratio": candidate.get("saturation_ratio"),
+        "exposure": candidate.get("exposure"),
+        "geometry": candidate.get("geometry"),
+        "plate_width": candidate.get("plate_width"),
+        "plate_height": candidate.get("plate_height"),
         "best_frame": candidate.get("best_frame"),
         "plate_confidence": candidate.get("plate_confidence"),
         "vehicle_confidence": candidate.get("vehicle_confidence"),
@@ -303,6 +308,7 @@ def _winner_fields(candidate: dict[str, Any]) -> dict[str, Any]:
         "image_full": full,
         "image_vehicle": candidate.get("image_vehicle"),
         "image_plate": candidate.get("image_plate"),
+        "good_evidence": _good_evidence(candidate),
     }
 
 
@@ -351,12 +357,14 @@ def consider_plate_candidate(
 
     quality = float(candidate["quality"])
     prev_quality = _quality_of(previous)
-    prev_sharp = float(previous.get("sharp") or 0.0)
-    cand_sharp = float(candidate.get("sharp") or 0.0)
-    if cand_sharp >= max(prev_sharp * 1.25, prev_sharp + 40.0):
-        quality = max(quality, prev_quality + 0.01)
     alts = list(previous.get("alternates") or [])
-    if quality > prev_quality:
+    candidate_good = _good_evidence(candidate)
+    previous_good = _good_evidence(previous)
+    # A plate wide enough to resolve strokes beats a sharper but tiny crop.
+    replace = (candidate_good and not previous_good) or (
+        candidate_good == previous_good and quality > prev_quality
+    )
+    if replace:
         alts.append(_quality_snapshot(previous, owned=True))
         previous.update(_winner_fields(candidate))
         previous["alternates"] = _trim_alternates(alts, quality)

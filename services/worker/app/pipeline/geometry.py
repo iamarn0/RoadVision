@@ -37,6 +37,22 @@ class BoundingBox:
     def as_int(self) -> tuple[int, int, int, int]:
         return int(self.x1), int(self.y1), int(self.x2), int(self.y2)
 
+    def scaled(self, scale_x: float, scale_y: float) -> "BoundingBox":
+        return BoundingBox(
+            self.x1 * scale_x,
+            self.y1 * scale_y,
+            self.x2 * scale_x,
+            self.y2 * scale_y,
+        )
+
+    def translated(self, origin_x: float, origin_y: float) -> "BoundingBox":
+        return BoundingBox(
+            self.x1 + origin_x,
+            self.y1 + origin_y,
+            self.x2 + origin_x,
+            self.y2 + origin_y,
+        )
+
     def contains_point(self, x: float, y: float) -> bool:
         return self.x1 <= x <= self.x2 and self.y1 <= y <= self.y2
 

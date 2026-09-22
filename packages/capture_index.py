@@ -52,7 +52,13 @@ def plate_index_item(
     overlay_clock: dict[str, Any] | None,
     plate_confidence: float | None = None,
     vehicle_confidence: float | None = None,
+    plate_width: float | None = None,
+    good_evidence: bool | None = None,
 ) -> dict[str, Any]:
+    width = None if plate_width is None else float(plate_width)
+    readable = good_evidence
+    if readable is None and width is not None:
+        readable = width >= 75.0
     return {
         "key": f"plate-{track_id}",
         "track_id": track_id,
@@ -64,6 +70,8 @@ def plate_index_item(
         "last_seen_overlay": overlay_for_seconds(overlay_clock, last_seen),
         "plate_confidence": plate_confidence,
         "vehicle_confidence": vehicle_confidence,
+        "plate_width": width,
+        "good_evidence": readable,
     }
 
 

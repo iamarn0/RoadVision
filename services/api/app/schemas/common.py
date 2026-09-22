@@ -90,6 +90,8 @@ class LiveCaptureItem(BaseModel):
     last_seen_overlay: Optional[str] = None
     plate_confidence: Optional[float] = None
     vehicle_confidence: Optional[float] = None
+    plate_width: Optional[float] = None
+    good_evidence: Optional[bool] = None
 
 
 class LiveCapturesResponse(BaseModel):

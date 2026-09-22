@@ -15,18 +15,44 @@ from app.preprocessing.plates import (
 )
 from app.tracking.tracker import TrackedVehicle
 
-ROI_IMAGE_SIZE = 640
+ROI_IMAGE_SIZE = 960
 MIN_PLATE_SEARCH_AREA = 2500.0
 MIN_PLATE_SEARCH_WIDTH = 36.0
 
 
 def remap_plate_box(local: BoundingBox, origin_x: float, origin_y: float) -> BoundingBox:
-    return BoundingBox(
-        local.x1 + origin_x,
-        local.y1 + origin_y,
-        local.x2 + origin_x,
-        local.y2 + origin_y,
-    )
+    return local.translated(origin_x, origin_y)
+
+
+def map_resized_box_to_original(
+    local: BoundingBox,
+    resized_width: float,
+    resized_height: float,
+    native_width: float,
+    native_height: float,
+    origin_x: float = 0.0,
+    origin_y: float = 0.0,
+) -> BoundingBox:
+    """Map a box from a resized detection copy back onto the original frame.
+
+    YOLO may run on a smaller copy. The crop for saving is always taken from
+    native-resolution pixels after this mapping.
+    """
+    scale_x = float(native_width) / max(float(resized_width), 1.0)
+    scale_y = float(native_height) / max(float(resized_height), 1.0)
+    return local.scaled(scale_x, scale_y).translated(origin_x, origin_y)
+
+
+def crop_from_original(
+    original: Any,
+    box: BoundingBox,
+    pad: float = 0.0,
+) -> Any:
+    from app.preprocessing.plates import crop_box
+
+    h, w = original.shape[:2]
+    x1, y1, x2, y2 = box.clip(w, h).as_int()
+    return crop_box(original, x1, y1, x2, y2, pad=pad)
 
 
 def vehicle_roi_pads(class_name: str) -> tuple[float, float, float, float]:
@@ -70,8 +96,14 @@ def search_plates_in_vehicles(
     timestamp: float,
     skip_ids: set[int] | None = None,
     confidence: float | None = None,
+    image_size: int | None = None,
 ) -> list[tuple[TrackedVehicle, Detection]]:
-    """Run plate YOLO on padded vehicle ROIs and remap boxes to frame coordinates."""
+    """Run plate YOLO on padded vehicle ROIs and remap boxes to frame coordinates.
+
+    The ROI is a native-resolution crop of the original frame. Detector `imgsz`
+    only affects the internal letterbox. Returned boxes are in ROI pixels and
+    then shifted by the crop origin so the final plate cut uses original pixels.
+    """
     skip_ids = skip_ids or set()
     rois: list[np.ndarray] = []
     origins: list[tuple[int, int, TrackedVehicle]] = []
@@ -94,7 +126,7 @@ def search_plates_in_vehicles(
         frame_number,
         timestamp,
         confidence=confidence,
-        image_size=ROI_IMAGE_SIZE,
+        image_size=image_size or ROI_IMAGE_SIZE,
     )
     frame_h, frame_w = frame_image.shape[:2]
     assigned: list[tuple[TrackedVehicle, Detection]] = []
