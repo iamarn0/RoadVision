@@ -33,11 +33,11 @@
             '<div class="container-fluid bg-dark px-5">' +
                 '<div class="row gx-4 d-none d-lg-flex">' +
                     '<div class="col-lg-6 text-start">' +
-                        '<div class="h-100 d-inline-flex align-items-center py-3 me-4"><div class="btn-sm-square rounded-circle bg-primary me-2"><small class="fa fa-map-marker-alt text-white"></small></div><small>Kolkata, West Bengal</small></div>' +
-                        '<div class="h-100 d-inline-flex align-items-center py-3"><div class="btn-sm-square rounded-circle bg-primary me-2"><small class="fa fa-envelope-open text-white"></small></div><small>info@roadvision.tech</small></div>' +
+                        '<div class="h-100 d-inline-flex align-items-center py-3 me-4"><div class="btn-sm-square rounded-circle bg-primary me-2"><small class="fa fa-map-marker-alt text-white"></small></div><small>42 Station Pally, Dankuni</small></div>' +
+                        '<div class="h-100 d-inline-flex align-items-center py-3"><div class="btn-sm-square rounded-circle bg-primary me-2"><small class="fa fa-envelope-open text-white"></small></div><small>info@unikorncam.tech</small></div>' +
                     "</div>" +
                     '<div class="col-lg-6 text-end">' +
-                        '<div class="h-100 d-inline-flex align-items-center py-3 me-4"><div class="btn-sm-square rounded-circle bg-primary me-2"><small class="fa fa-phone-alt text-white"></small></div><small><a class="text-white" href="tel:+919831933297">+91 9831933297</a></small></div>' +
+                        '<div class="h-100 d-inline-flex align-items-center py-3 me-4"><div class="btn-sm-square rounded-circle bg-primary me-2"><small class="fa fa-phone-alt text-white"></small></div><small><a class="text-white" href="tel:+918100044473">+91 8100044473</a></small></div>' +
                         '<div class="h-100 d-inline-flex align-items-center py-3"><div class="btn-sm-square rounded-circle bg-primary me-2"><small class="far fa-clock text-white"></small></div><small>24/7 Customer Support</small></div>' +
                     "</div>" +
                 "</div>" +
@@ -49,7 +49,7 @@
                     '<div class="navbar-nav ms-auto py-4 py-lg-0">' + navLinks(active) + "</div>" +
                     '<div class="h-100 d-lg-inline-flex align-items-center d-none">' +
                         '<a class="btn btn-square rounded-circle bg-light text-primary me-2" href="https://www.linkedin.com/" target="_blank" rel="noopener noreferrer" aria-label="LinkedIn"><i class="fab fa-linkedin-in"></i></a>' +
-                        '<a class="btn btn-square rounded-circle bg-light text-primary me-0" href="mailto:info@roadvision.tech" aria-label="Email"><i class="fa fa-envelope"></i></a>' +
+                        '<a class="btn btn-square rounded-circle bg-light text-primary me-0" href="mailto:info@unikorncam.tech" aria-label="Email"><i class="fa fa-envelope"></i></a>' +
                     "</div>" +
                 "</div>" +
             "</nav>"
@@ -82,9 +82,9 @@
                 '<div class="container py-5"><div class="row g-5">' +
                     '<div class="col-lg-3 col-md-6">' +
                         '<h5 class="text-light mb-4">Address</h5>' +
-                        '<p class="mb-2"><i class="fa fa-map-marker-alt me-3"></i>Kolkata, West Bengal, India</p>' +
-                        '<p class="mb-2"><i class="fa fa-phone-alt me-3"></i><a class="text-secondary" href="tel:+919831933297">+91 9831933297</a></p>' +
-                        '<p class="mb-2"><i class="fa fa-envelope me-3"></i><a class="text-secondary" href="mailto:info@roadvision.tech">info@roadvision.tech</a></p>' +
+                        '<p class="mb-2"><i class="fa fa-map-marker-alt me-3"></i>Unikorn, 42 Station Pally, Dankuni - 712311</p>' +
+                        '<p class="mb-2"><i class="fa fa-phone-alt me-3"></i><a class="text-secondary" href="tel:+918100044473">+91 8100044473</a></p>' +
+                        '<p class="mb-2"><i class="fa fa-envelope me-3"></i><a class="text-secondary" href="mailto:info@unikorncam.tech">info@unikorncam.tech</a></p>' +
                     "</div>" +
                     '<div class="col-lg-3 col-md-6"><h5 class="text-light mb-4">Services</h5>' + serviceLinks + "</div>" +
                     '<div class="col-lg-3 col-md-6"><h5 class="text-light mb-4">Quick Links</h5>' +
@@ -140,7 +140,7 @@
             });
         }).catch(function () {
             if (statusEl) {
-                statusEl.textContent = "Unable to send right now. Email info@roadvision.tech.";
+                statusEl.textContent = "Unable to send right now. Email info@unikorncam.tech.";
                 statusEl.className = "small mt-3 mb-0 text-danger";
             }
         });
