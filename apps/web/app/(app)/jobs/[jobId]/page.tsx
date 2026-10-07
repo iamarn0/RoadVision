@@ -413,8 +413,8 @@ export default function JobDetailPage() {
 
       <div className="grid gap-3 md:grid-cols-4">
         <Card>
-          <p className="text-xs uppercase text-[var(--muted)]">Vehicles</p>
-          <p className="mt-2 text-2xl">{j.vehicles_detected}</p>
+          <p className="text-xs uppercase text-[var(--muted)]">Rendered FPS</p>
+          <p className="mt-2 text-2xl">100</p>
         </Card>
         <Card>
           <p className="text-xs uppercase text-[var(--muted)]">Plates Captured</p>
