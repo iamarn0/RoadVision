@@ -23,14 +23,21 @@ class VehicleTracker:
         self._next_id = 1
         self._previous: list[TrackedVehicle] = []
 
-    def update(self, image: np.ndarray, frame_number: int, timestamp: float) -> list[TrackedVehicle]:
+    def update(
+        self,
+        image: np.ndarray,
+        frame_number: int,
+        timestamp: float,
+        confidence: float | None = None,
+    ) -> list[TrackedVehicle]:
+        conf = self.detector.confidence if confidence is None else confidence
         model = getattr(self.detector, "model", None)
         if model is not None and hasattr(model, "track"):
             try:
                 results = model.track(
                     image,
                     persist=self.persist,
-                    conf=self.detector.confidence,
+                    conf=conf,
                     iou=self.detector.iou,
                     imgsz=self.detector.image_size,
                     device=self.detector.device,
@@ -69,7 +76,7 @@ class VehicleTracker:
                 return tracked
             except Exception:
                 logger.exception("ByteTrack update failed; falling back to IoU association")
-        detections = self.detector.detect(image, frame_number, timestamp)
+        detections = self.detector.detect(image, frame_number, timestamp, confidence=conf)
         return self._iou_associate(detections)
 
     def _iou_associate(self, detections: list[Detection]) -> list[TrackedVehicle]:

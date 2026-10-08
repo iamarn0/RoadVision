@@ -106,10 +106,16 @@ class VehicleDetector:
         if isinstance(vid_path, list):
             predictor.vid_path = [None] * len(vid_path)
 
-    def detect(self, image: np.ndarray, frame_number: int, timestamp: float) -> list[Detection]:
+    def detect(
+        self,
+        image: np.ndarray,
+        frame_number: int,
+        timestamp: float,
+        confidence: float | None = None,
+    ) -> list[Detection]:
         results = self.model.predict(
             image,
-            conf=self.confidence,
+            conf=self.confidence if confidence is None else confidence,
             iou=self.iou,
             imgsz=self.image_size,
             device=self.device,

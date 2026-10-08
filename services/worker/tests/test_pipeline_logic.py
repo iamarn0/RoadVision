@@ -255,6 +255,118 @@ def test_prepare_roi_skips_enhance_on_bright_crop() -> None:
     assert np.array_equal(out, bright)
 
 
+def test_plate_outside_vehicle_body_is_not_attached() -> None:
+    import numpy as np
+    from app.pipeline.geometry import BoundingBox, Detection
+    from app.pipeline.plate_search import crop_vehicle_roi, search_plates_in_vehicles
+    from app.tracking.tracker import TrackedVehicle
+
+    frame = np.zeros((240, 480, 3), dtype=np.uint8)
+    vehicle = TrackedVehicle(
+        track_id=1,
+        detection=Detection(BoundingBox(30, 40, 150, 180), "car", 0.9, 1, 0.0),
+    )
+    _crop, ox, oy = crop_vehicle_roi(frame, vehicle.detection.bounding_box, "car")
+
+    class Detector:
+        def detect_many(self, images, frame_number, timestamp, confidence=None, image_size=None):
+            # A clear plate sitting on the next car, to the right of this body.
+            local = BoundingBox(300 - ox, 90 - oy, 360 - ox, 120 - oy)
+            return [[Detection(local, "license_plate", 0.95, frame_number, timestamp)]]
+
+    assigned = search_plates_in_vehicles(frame, [vehicle], Detector(), 1, 0.0)
+    assert assigned == []
+
+
+def test_same_plate_seen_in_two_rois_stays_with_the_car_that_contains_it() -> None:
+    import numpy as np
+    from app.pipeline.geometry import BoundingBox, Detection
+    from app.pipeline.plate_search import crop_vehicle_roi, search_plates_in_vehicles
+    from app.tracking.tracker import TrackedVehicle
+
+    frame = np.zeros((240, 480, 3), dtype=np.uint8)
+    owner = TrackedVehicle(
+        track_id=1,
+        detection=Detection(BoundingBox(40, 40, 180, 190), "car", 0.9, 1, 0.0),
+    )
+    neighbour = TrackedVehicle(
+        track_id=2,
+        detection=Detection(BoundingBox(190, 40, 340, 190), "car", 0.9, 1, 0.0),
+    )
+    plate = BoundingBox(70, 150, 140, 175)
+
+    class Detector:
+        def detect_many(self, images, frame_number, timestamp, confidence=None, image_size=None):
+            batches = []
+            for vehicle in (owner, neighbour):
+                _crop, ox, oy = crop_vehicle_roi(frame, vehicle.detection.bounding_box, "car")
+                local = BoundingBox(plate.x1 - ox, plate.y1 - oy, plate.x2 - ox, plate.y2 - oy)
+                batches.append([Detection(local, "license_plate", 0.95, frame_number, timestamp)])
+            return batches
+
+    assigned = search_plates_in_vehicles(frame, [owner, neighbour], Detector(), 1, 0.0)
+    assert [vehicle.track_id for vehicle, _plate in assigned] == [1]
+
+
+def test_duplicate_plate_captures_collapse_to_one_row() -> None:
+    from app.pipeline.capture_merge import collapse_duplicate_captures
+
+    plate = _plate_bars()
+    best = {
+        4: {
+            "first_seen": 1.0,
+            "last_seen": 1.4,
+            "quality": 0.4,
+            "vehicle_box": {"x1": 10, "y1": 20, "x2": 80, "y2": 90},
+            "image_plate": plate,
+            "source_ids": {4},
+        },
+        19: {
+            "first_seen": 1.8,
+            "last_seen": 2.2,
+            "quality": 0.8,
+            "vehicle_box": {"x1": 200, "y1": 20, "x2": 280, "y2": 100},
+            "image_plate": plate,
+            "source_ids": {19},
+        },
+    }
+    merged = collapse_duplicate_captures(best)
+    assert merged == [(19, 4)] or set(merged) == {(19, 4)}
+    assert list(best) == [19]
+    assert 4 in best[19]["source_ids"]
+
+
+def test_vehicle_only_duplicate_collapses_into_plate_row() -> None:
+    import numpy as np
+    from app.pipeline.capture_merge import collapse_duplicate_captures
+
+    plate = _plate_bars()
+    vehicle = np.zeros((30, 40, 3), dtype=np.uint8)
+    best = {
+        4: {
+            "first_seen": 1.0,
+            "last_seen": 2.0,
+            "quality": 0.7,
+            "vehicle_box": {"x1": 10, "y1": 10, "x2": 90, "y2": 80},
+            "image_plate": plate,
+            "image_vehicle": vehicle,
+            "source_ids": {4},
+        },
+        9: {
+            "first_seen": 2.1,
+            "last_seen": 2.4,
+            "vehicle_only": True,
+            "vehicle_box": {"x1": 16, "y1": 14, "x2": 96, "y2": 86},
+            "image_vehicle": vehicle,
+            "source_ids": {9},
+        },
+    }
+    collapse_duplicate_captures(best)
+    assert list(best) == [4]
+    assert 9 in best[4]["source_ids"]
+    assert best[4].get("vehicle_only") is not True
+
+
 def test_tiny_vehicle_boxes_are_not_searched_for_plates() -> None:
     import numpy as np
     from app.pipeline.geometry import BoundingBox, Detection
@@ -412,7 +524,7 @@ def test_vehicle_capture_pads_keep_bumper_context() -> None:
     assert car[0] == VEHICLE_CROP_PAD
     assert car[3] > car[1]
     assert moto[3] > car[3]
-    assert ROI_IMAGE_SIZE == 960
+    assert ROI_IMAGE_SIZE == 416
 
 
 def test_diagnostics_writes_json_not_info_png_when_enabled(tmp_path) -> None:
@@ -621,18 +733,79 @@ def test_two_wheelers_map_to_motorcycle() -> None:
         assert VEHICLE_CLASS_MAP[name] == "motorcycle"
 
 
-def test_playback_strides_sample_five_to_eight_fps() -> None:
+def test_working_image_scale_maps_back_to_native() -> None:
+    import numpy as np
+    from app.pipeline.geometry import BoundingBox
+    from app.pipeline.plate_search import make_working_image
+
+    image = np.zeros((2160, 3840, 3), dtype=np.uint8)
+    working, scale = make_working_image(image)
+    assert working.shape[1] == 960
+    assert working.shape[0] == 540
+    native = BoundingBox(10, 20, 30, 40).scaled(scale, scale)
+    assert native.x1 == 40
+    assert native.y1 == 80
+    assert native.x2 == 120
+    assert native.y2 == 160
+
+
+def test_unattached_plate_is_kept_and_drawn() -> None:
+    import numpy as np
+    from app.pipeline.association import associate_plates, unassigned_plates
+    from app.pipeline.geometry import BoundingBox, Detection
+    from app.rendering.annotate import draw_overlay
+    from app.tracking.tracker import TrackedVehicle
+
+    vehicle = TrackedVehicle(
+        track_id=1,
+        detection=Detection(BoundingBox(0, 0, 40, 40), "car", 0.9, 1, 0.0),
+    )
+    near = Detection(BoundingBox(10, 20, 30, 35), "license_plate", 0.9, 1, 0.0)
+    far = Detection(BoundingBox(200, 200, 260, 230), "license_plate", 0.8, 1, 0.0)
+    assigned = associate_plates([vehicle], [near, far])
+    loose = unassigned_plates([near, far], assigned)
+    assert near not in loose
+    assert far in loose
+    frame = np.zeros((300, 320, 3), dtype=np.uint8)
+    out = draw_overlay(frame, [], [], loose_plates=[far])
+    x1, y1, _x2, _y2 = far.bounding_box.as_int()
+    assert tuple(int(channel) for channel in out[y1, x1]) == (201, 146, 42)
+
+
+def test_grab_skips_frames_without_decoding(tmp_path) -> None:
+    import cv2
+    import numpy as np
+    from app.pipeline.video_source import UploadedFileSource
+
+    video = tmp_path / "clip.mp4"
+    writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"mp4v"), 5.0, (32, 32))
+    for value in range(6):
+        writer.write(np.full((32, 32, 3), value * 20, dtype=np.uint8))
+    writer.release()
+    source = UploadedFileSource(video)
+    source.open()
+    try:
+        first = source.read()
+        assert first is not None and first.index == 0
+        assert source.grab(2) == 2
+        later = source.read()
+        assert later is not None and later.index == 3
+    finally:
+        source.close()
+
+
+def test_playback_strides_sample_about_four_fps() -> None:
     from app.pipeline.runner import _playback_strides, _preview_size
 
     preview, vehicle, plate, preview_fps = _playback_strides(25)
-    assert preview == vehicle == plate == 3
-    assert 7.5 <= preview_fps <= 8.5
+    assert preview == vehicle == plate == 6
+    assert 4.0 <= preview_fps <= 4.3
     behind_preview, behind_vehicle, behind_plate, behind_fps = _playback_strides(25, behind=True)
-    assert behind_preview == behind_vehicle == behind_plate == 5
-    assert behind_fps == 5
+    assert behind_preview == behind_vehicle == behind_plate == 6
+    assert behind_fps == preview_fps
     fast_preview, fast_vehicle, fast_plate, fast_fps = _playback_strides(100)
     assert fast_preview == fast_vehicle == fast_plate
-    assert 7.0 <= fast_fps <= 9.0
+    assert fast_fps == 4.0
     assert _preview_size(2500, 1400)[0] == 1280
 
 

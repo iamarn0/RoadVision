@@ -100,6 +100,18 @@ class UploadedFileSource(VideoSource):
         self._index += 1
         return frame
 
+    def grab(self, count: int) -> int:
+        """Advance without decoding. Used to sample looks instead of every source frame."""
+        if self._cap is None:
+            raise RuntimeError("VideoSource is not open")
+        grabbed = 0
+        for _ in range(max(0, int(count))):
+            if not self._cap.grab():
+                break
+            self._index += 1
+            grabbed += 1
+        return grabbed
+
     def close(self) -> None:
         if self._cap is not None:
             self._cap.release()

@@ -53,3 +53,12 @@ def associate_plates(
         used_plates.add(pid)
         assigned.append((vehicle, plate))
     return assigned
+
+
+def unassigned_plates(
+    plates: list[Detection],
+    assigned: list[tuple[TrackedVehicle, Detection]],
+) -> list[Detection]:
+    """Plates that did not fall inside a vehicle. They are still shown."""
+    used = {id(plate) for _vehicle, plate in assigned}
+    return [plate for plate in plates if id(plate) not in used]

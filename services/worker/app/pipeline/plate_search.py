@@ -15,9 +15,52 @@ from app.preprocessing.plates import (
 )
 from app.tracking.tracker import TrackedVehicle
 
-ROI_IMAGE_SIZE = 960
+ROI_IMAGE_SIZE = 416
 MIN_PLATE_SEARCH_AREA = 2500.0
 MIN_PLATE_SEARCH_WIDTH = 36.0
+WORKING_MAX_WIDTH = 960
+# Share of the plate box that must sit on this vehicle. Stops a sharp plate
+# in a neighbour's lane, caught only because of ROI padding, from being saved
+# against the wrong car.
+MIN_PLATE_INSIDE = 0.55
+
+
+def make_working_image(image: np.ndarray) -> tuple[np.ndarray, float]:
+    """Shrink a frame so detection does not run on native 4K pixels.
+
+    Returns the working image and the scale that maps working pixels back to
+    native pixels (native = working * scale).
+    """
+    import cv2
+
+    height, width = image.shape[:2]
+    if width <= WORKING_MAX_WIDTH:
+        return image, 1.0
+    new_w = WORKING_MAX_WIDTH
+    new_h = max(2, int(round(height * (WORKING_MAX_WIDTH / float(width)))) // 2 * 2)
+    new_w = max(2, new_w // 2 * 2)
+    resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    scale = float(width) / float(resized.shape[1])
+    return resized, scale
+
+
+def scale_detection(det: Detection, scale: float) -> Detection:
+    if scale == 1.0:
+        return det
+    return Detection(
+        bounding_box=det.bounding_box.scaled(scale, scale),
+        class_name=det.class_name,
+        confidence=det.confidence,
+        frame_number=det.frame_number,
+        timestamp=det.timestamp,
+        track_id=det.track_id,
+    )
+
+
+def scale_vehicle(vehicle: TrackedVehicle, scale: float) -> TrackedVehicle:
+    if scale == 1.0:
+        return vehicle
+    return TrackedVehicle(track_id=vehicle.track_id, detection=scale_detection(vehicle.detection, scale))
 
 
 def remap_plate_box(local: BoundingBox, origin_x: float, origin_y: float) -> BoundingBox:
@@ -56,10 +99,13 @@ def crop_from_original(
 
 
 def vehicle_roi_pads(class_name: str) -> tuple[float, float, float, float]:
-    """left, top, right, bottom — extra bottom pad for rear plates / motorcycles."""
+    """left, top, right, bottom — extra bottom pad for rear plates / motorcycles.
+
+    Side pad stays small so the next car's plate is not inside this crop.
+    """
     if class_name == "motorcycle":
-        return 0.28, 0.12, 0.28, 0.42
-    return 0.22, 0.12, 0.22, 0.32
+        return 0.12, 0.08, 0.12, 0.28
+    return 0.08, 0.06, 0.08, 0.20
 
 
 def vehicle_capture_pads(class_name: str) -> tuple[float, float, float, float]:
@@ -78,6 +124,31 @@ def crop_vehicle_roi(
     x1, y1, x2, y2 = box.clip(w, h).as_int()
     pad_l, pad_t, pad_r, pad_b = vehicle_roi_pads(class_name)
     return crop_box_asymmetric(image, x1, y1, x2, y2, pad_l, pad_t, pad_r, pad_b)
+
+
+def ownership_region(box: BoundingBox) -> BoundingBox:
+    """Vehicle box plus a short bumper margin. Not the full search pad."""
+    return BoundingBox(
+        box.x1 - box.width * 0.06,
+        box.y1 - box.height * 0.04,
+        box.x2 + box.width * 0.06,
+        box.y2 + box.height * 0.18,
+    )
+
+
+def _intersection_area(a: BoundingBox, b: BoundingBox) -> float:
+    ix1 = max(a.x1, b.x1)
+    iy1 = max(a.y1, b.y1)
+    ix2 = min(a.x2, b.x2)
+    iy2 = min(a.y2, b.y2)
+    return max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+
+
+def plate_inside_fraction(plate: BoundingBox, vehicle: BoundingBox) -> float:
+    area = plate.area
+    if area <= 0:
+        return 0.0
+    return _intersection_area(plate, ownership_region(vehicle)) / area
 
 
 def prepare_roi_for_detect(roi: np.ndarray) -> np.ndarray:
@@ -129,9 +200,9 @@ def search_plates_in_vehicles(
         image_size=image_size or ROI_IMAGE_SIZE,
     )
     frame_h, frame_w = frame_image.shape[:2]
-    assigned: list[tuple[TrackedVehicle, Detection]] = []
+    per_vehicle: dict[int, tuple[TrackedVehicle, Detection, float]] = {}
     for (ox, oy, vehicle), detections in zip(origins, batches):
-        best: Detection | None = None
+        body = vehicle.detection.bounding_box
         for det in detections:
             remapped = Detection(
                 bounding_box=remap_plate_box(det.bounding_box, ox, oy),
@@ -143,10 +214,22 @@ def search_plates_in_vehicles(
             )
             if _crop_is_caption(frame_image, remapped, frame_w, frame_h):
                 continue
-            if best is None or remapped.confidence > best.confidence:
-                best = remapped
-        if best:
-            assigned.append((vehicle, best))
+            inside = plate_inside_fraction(remapped.bounding_box, body)
+            if inside < MIN_PLATE_INSIDE:
+                continue
+            current = per_vehicle.get(vehicle.track_id)
+            if current is None or inside > current[2] or (
+                abs(inside - current[2]) <= 0.05 and remapped.confidence > current[1].confidence
+            ):
+                per_vehicle[vehicle.track_id] = (vehicle, remapped, inside)
+    ranked = sorted(per_vehicle.values(), key=lambda item: (item[2], item[1].confidence), reverse=True)
+    assigned: list[tuple[TrackedVehicle, Detection]] = []
+    kept_boxes: list[BoundingBox] = []
+    for vehicle, plate, _inside in ranked:
+        if any(plate.bounding_box.iou(prev) >= 0.35 for prev in kept_boxes):
+            continue
+        kept_boxes.append(plate.bounding_box)
+        assigned.append((vehicle, plate))
     return assigned
 
 

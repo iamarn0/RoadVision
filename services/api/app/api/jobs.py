@@ -147,7 +147,7 @@ def _job_overlay_clock(job: ProcessingJob, captures_dir: Path) -> dict[str, Any]
 def _save_live_snapshot(job: ProcessingJob, db: Session | None = None) -> Path:
     raw = _live_raw_path(job.id)
     live = _live_frame_path(job.id)
-    src = raw if raw.exists() else live
+    src = live if live.exists() else raw
     if not src.exists():
         raise AppError(ErrorCodes.NOT_FOUND, "Live frame is not available yet", status_code=404)
     captures_dir = _captures_dir(job.id)

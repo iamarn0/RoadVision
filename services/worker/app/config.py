@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     display_plate_threshold: float = 0.65
 
     anpr_debug: bool = False
-    plate_roi_image_size: int = 960
+    plate_roi_image_size: int = 416
     plate_candidate_top_n: int = 20
     plate_quality_min_width_px: float = 28.0
     plate_quality_min_height_px: float = 10.0

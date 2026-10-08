@@ -10,12 +10,28 @@ from app.pipeline.geometry import Detection
 from app.tracking.tracker import TrackedVehicle
 
 
+def _draw_plate_box(canvas: np.ndarray, plate: Detection) -> None:
+    x1, y1, x2, y2 = plate.bounding_box.as_int()
+    cv2.rectangle(canvas, (x1, y1), (x2, y2), (201, 146, 42), 2)
+    cv2.putText(
+        canvas,
+        "PLATE",
+        (x1, max(18, y1 - 6)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (201, 146, 42),
+        2,
+        cv2.LINE_AA,
+    )
+
+
 def draw_overlay(
     frame: np.ndarray,
     vehicles: list[TrackedVehicle],
     plates: list[tuple[TrackedVehicle, Detection]],
     captures: dict[int, dict[str, Any]] | None = None,
     timestamp: float = 0.0,
+    loose_plates: list[Detection] | None = None,
 ) -> np.ndarray:
     """Draw vehicle boxes and plate boxes. No OCR text is rendered."""
     canvas = frame.copy()
@@ -51,19 +67,10 @@ def draw_overlay(
             2,
             cv2.LINE_AA,
         )
-    for vehicle, plate in plates:
-        x1, y1, x2, y2 = plate.bounding_box.as_int()
-        cv2.rectangle(canvas, (x1, y1), (x2, y2), (201, 146, 42), 2)
-        cv2.putText(
-            canvas,
-            "PLATE",
-            (x1, max(18, y1 - 6)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (201, 146, 42),
-            2,
-            cv2.LINE_AA,
-        )
+    for _vehicle, plate in plates:
+        _draw_plate_box(canvas, plate)
+    for plate in loose_plates or []:
+        _draw_plate_box(canvas, plate)
     return canvas
 
 
