@@ -794,18 +794,18 @@ def test_grab_skips_frames_without_decoding(tmp_path) -> None:
         source.close()
 
 
-def test_playback_strides_sample_about_four_fps() -> None:
+def test_playback_strides_keep_every_source_frame() -> None:
     from app.pipeline.runner import _playback_strides, _preview_size
 
     preview, vehicle, plate, preview_fps = _playback_strides(25)
-    assert preview == vehicle == plate == 6
-    assert 4.0 <= preview_fps <= 4.3
+    assert preview == vehicle == plate == 1
+    assert preview_fps == 25
     behind_preview, behind_vehicle, behind_plate, behind_fps = _playback_strides(25, behind=True)
-    assert behind_preview == behind_vehicle == behind_plate == 6
+    assert behind_preview == behind_vehicle == behind_plate == 1
     assert behind_fps == preview_fps
     fast_preview, fast_vehicle, fast_plate, fast_fps = _playback_strides(100)
-    assert fast_preview == fast_vehicle == fast_plate
-    assert fast_fps == 4.0
+    assert fast_preview == fast_vehicle == fast_plate == 1
+    assert fast_fps == 100
     assert _preview_size(2500, 1400)[0] == 1280
 
 

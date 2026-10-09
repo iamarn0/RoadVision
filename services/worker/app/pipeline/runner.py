@@ -187,24 +187,19 @@ def _preview_size(width: int, height: int, max_width: int = 1280) -> tuple[int, 
     return max(2, int(width * scale) // 2 * 2), max(2, int(height * scale) // 2 * 2)
 
 
-# Four looks a second is enough to keep the sharpest plate on a passing car.
-# Running the models on every source frame is what turns a 5 s / 100-frame
-# clip into the better part of a minute.
-DETECT_FPS = 4.0
 # Dim rear of a truck leaving the camera. 0.15 still never reached the tracker gate.
 NIGHT_VEHICLE_CONFIDENCE = 0.08
 
 
 def _playback_strides(source_fps: float, *, behind: bool = False) -> tuple[int, int, int, float]:
-    """How often to detect vehicles, read plates, and refresh the picture.
+    """Detect and play every source frame.
 
-    `behind` is unused. Sampling stays fixed so a short file is not decoded
-    frame-by-frame just because the first look was slow.
+    Skipping ahead drops the only sharp plate on a passing vehicle, and the
+    player then jumps to the next decoded frame and back.
     """
     del behind
     fps = max(float(source_fps or 25.0), 1.0)
-    stride = max(1, int(round(fps / min(fps, DETECT_FPS))))
-    return stride, stride, stride, fps / stride
+    return 1, 1, 1, fps
 
 
 def _write_live_frames(live_frame_path: Path, overlay: Any) -> bytes | None:
@@ -715,7 +710,7 @@ def process_job(db: Session, job_id: UUID) -> None:
 
     profile = PROFILES.get(job.processing_profile or "balanced", PROFILES["balanced"])
     image_size = int(profile.get("inference_image_size", settings.inference_image_size))
-    # Sample vehicles and plates at about 5–8 fps by decoding only those frames.
+    # 0 means every source frame. A positive skip is only an explicit override.
     frame_skip = 0
     use_half = bool(profile.get("use_half_precision", settings.use_half_precision))
     overrides = (job.model_versions or {}).get("overrides") or {}

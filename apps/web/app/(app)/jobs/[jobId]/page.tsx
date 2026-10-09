@@ -247,19 +247,19 @@ export default function JobDetailPage() {
     }
     framePaceRef.current = { frame, at: now };
     const drift = el.currentTime - target;
-    // Rewinding to the processed frame repeats the same picture. Wait in place instead.
-    if (drift > 0.45) {
+    // Do not seek. A seek jumps the picture forward, and the next correction jumps it back,
+    // which also hides the frame that held the plate.
+    if (drift > 0.35) {
       el.playbackRate = 1;
       if (!el.paused) el.pause();
       return;
     }
-    el.playbackRate = drift > 0.12 ? Math.min(rate, 0.5) : rate;
-    if (drift < -1) {
-      try {
-        el.currentTime = target;
-      } catch {
-        /* ignore seek errors while metadata loads */
-      }
+    if (drift > 0.12) {
+      el.playbackRate = Math.min(rate, 0.5);
+    } else if (drift < -0.2) {
+      el.playbackRate = Math.min(1, Math.max(rate, 0.85));
+    } else {
+      el.playbackRate = rate;
     }
     if (el.paused) void el.play().catch(() => undefined);
   }, [active, paused, job.data?.current_frame, job.data?.source_fps, job.data?.status]);
