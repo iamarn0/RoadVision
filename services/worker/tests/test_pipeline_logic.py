@@ -825,6 +825,36 @@ def test_consider_prefers_readable_width_over_sharper_tiny_crop() -> None:
     assert capture["good_evidence"] is True
 
 
+def test_consider_keeps_closer_plate_for_approach_and_departure() -> None:
+    from app.preprocessing.plates import consider_plate_candidate
+
+    far = _candidate(0.91, 1, "a")
+    far["plate_width"] = 80
+    far["good_evidence"] = True
+    near = _candidate(0.42, 12, "b")
+    near["plate_width"] = 150
+    near["good_evidence"] = True
+    leaving = _candidate(0.88, 20, "c")
+    leaving["plate_width"] = 70
+    leaving["good_evidence"] = True
+
+    capture = consider_plate_candidate(None, far)
+    capture = consider_plate_candidate(capture, near)
+    capture = consider_plate_candidate(capture, leaving)
+    assert capture["best_frame"] == 12
+    assert capture["plate_width"] == 150
+
+
+def test_approach_holds_publish_until_vehicle_stops_closing() -> None:
+    from app.pipeline.runner import capture_is_due_to_publish
+
+    closing = {"published": False, "last_seen": 1.0, "closing": True}
+    assert capture_is_due_to_publish(closing, visible=False, now_ts=2.0) is False
+    assert capture_is_due_to_publish(closing, visible=False, now_ts=3.6) is True
+    leaving = {"published": False, "last_seen": 1.0, "closing": False}
+    assert capture_is_due_to_publish(leaving, visible=False, now_ts=1.5) is True
+
+
 def test_public_error_includes_exception_type() -> None:
     from app.pipeline.runner import _public_error
 

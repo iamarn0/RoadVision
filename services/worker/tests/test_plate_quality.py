@@ -123,6 +123,37 @@ def test_candidate_store_prefers_readable_width_over_higher_score() -> None:
     assert store.winner(4)["frame_number"] == 8
 
 
+def test_candidate_store_prefers_closer_plate_over_sharper_far_one() -> None:
+    store = PlateCandidateStore(top_n=4)
+    store.record_detection(
+        4,
+        width=70,
+        height=22,
+        accepted=True,
+        candidate={
+            "frame_number": 2,
+            "total_score": 0.92,
+            "plate_width": 70,
+            "good_evidence": False,
+            "image_plate": np.zeros((8, 24, 3), dtype=np.uint8),
+        },
+    )
+    store.record_detection(
+        4,
+        width=150,
+        height=44,
+        accepted=True,
+        candidate={
+            "frame_number": 18,
+            "total_score": 0.41,
+            "plate_width": 150,
+            "good_evidence": True,
+            "image_plate": np.zeros((8, 24, 3), dtype=np.uint8),
+        },
+    )
+    assert store.winner(4)["frame_number"] == 18
+
+
 def test_ranking_prefers_larger_readable_over_tiny_noisy() -> None:
     large_total, _ = rank_score(
         width=182,

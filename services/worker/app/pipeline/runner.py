@@ -257,9 +257,15 @@ def _sync_captures_index(
 
 
 PUBLISH_UNSEEN_SECONDS = 0.5
+# While the vehicle box is still growing, a short tracker gap is not the end of
+# the pass. Waiting longer keeps the far first frame from being frozen before
+# the car reaches the camera.
+APPROACH_HOLD_SECONDS = 2.5
 # A vehicle still inside the frame in the last second of the file never goes
 # unseen, so it would otherwise never be written to the capture list.
 END_STILL_VISIBLE_SECONDS = 1.0
+# Swap the vehicle photo only when the body is clearly nearer than the plate frame.
+CLOSER_VEHICLE_RATIO = 1.15
 
 
 def capture_is_due_to_publish(
@@ -273,7 +279,8 @@ def capture_is_due_to_publish(
     if visible:
         return False
     last_seen = float(capture.get("last_seen") or 0.0)
-    return now_ts - last_seen >= unseen_seconds
+    hold = APPROACH_HOLD_SECONDS if capture.get("closing") else unseen_seconds
+    return now_ts - last_seen >= hold
 
 
 def _capture_for_vehicle(
@@ -296,13 +303,18 @@ def _vehicle_is_published(track_id: int, best_by_track: dict[int, dict[str, Any]
     return bool(capture and capture.get("published"))
 
 
+def _capture_view(capture: dict[str, Any]) -> tuple[Any, Any]:
+    return (capture.get("best_frame"), capture.get("vehicle_frame"))
+
+
 def _publish_track_capture(
     captures_dir: Path,
     capture_id: int,
     capture: dict[str, Any],
     overlay_clock: dict[str, Any] | None,
 ) -> bool:
-    if capture.get("published"):
+    view = _capture_view(capture)
+    if capture.get("published") and capture.get("saved_view") == view:
         return False
     plate = capture.get("image_plate")
     vehicle_img = capture.get("image_vehicle")
@@ -341,6 +353,7 @@ def _publish_track_capture(
         sidecar["vehicle_only"] = True
     (captures_dir / f"track_{capture_id}.json").write_text(json.dumps(sidecar), encoding="utf-8")
     capture["published"] = True
+    capture["saved_view"] = view
     return True
 
 
@@ -348,7 +361,7 @@ def _apply_store_winners(
     best_by_track: dict[int, dict[str, Any]],
     store: PlateCandidateStore,
 ) -> None:
-    """The buffer's highest image-quality crop is the plate that gets saved."""
+    """The closest readable plate in the buffer is the crop that gets saved."""
     for track_id, capture in best_by_track.items():
         winner = store.winner(track_id)
         if not winner:
@@ -380,6 +393,32 @@ def _apply_store_winners(
         )
         if winner.get("plate_bbox"):
             capture["plate_box"] = winner["plate_bbox"]
+        if winner.get("vehicle_area") is not None:
+            capture["vehicle_area"] = float(winner["vehicle_area"])
+
+
+def _apply_closest_vehicles(
+    best_by_track: dict[int, dict[str, Any]],
+    open_crops: dict[int, dict[str, Any]],
+) -> None:
+    """Vehicle and full-frame photos follow the largest body, not the first or last look."""
+    for track_id, crop in open_crops.items():
+        _cid, capture = _capture_for_vehicle(best_by_track, track_id)
+        if capture is None:
+            continue
+        area = float(crop.get("area") or 0.0)
+        if area <= float(capture.get("vehicle_area") or 0.0) * CLOSER_VEHICLE_RATIO:
+            continue
+        image = crop.get("image")
+        if image is None or getattr(image, "size", 0) == 0:
+            continue
+        capture["image_vehicle"] = image
+        capture["vehicle_box"] = crop.get("vehicle_box")
+        capture["vehicle_area"] = area
+        capture["vehicle_frame"] = crop.get("frame")
+        full = crop.get("image_full")
+        if full is not None and getattr(full, "size", 0) > 0:
+            capture["image_full"] = full
 
 
 def _collapse_captures(
@@ -581,6 +620,7 @@ def _flush_plate_outputs(
     )
     _collapse_captures(best_by_track, candidate_store)
     _apply_store_winners(best_by_track, candidate_store)
+    _apply_closest_vehicles(best_by_track, open_crops or {})
     _publish_all_pending(captures_dir, best_by_track, overlay_clock)
     _sync_captures_index(captures_dir, best_by_track, overlay_clock)
     summary = video_summary(
@@ -911,20 +951,32 @@ def process_job(db: Session, job_id: UUID) -> None:
                 info["conf"] = max(info["conf"], v.detection.confidence)
                 info["type"] = v.detection.class_name
                 info["frame_count"] = int(info.get("frame_count") or 0) + 1
-                if _capture_for_vehicle(best_by_track, v.track_id)[1] is None:
-                    box = v.detection.bounding_box
-                    if box.area >= MIN_PLATE_SEARCH_AREA and box.width >= MIN_PLATE_SEARCH_WIDTH:
-                        vx1, vy1, vx2, vy2 = box.clip(meta.width, meta.height).as_int()
-                        pad_l, pad_t, pad_r, pad_b = vehicle_capture_pads(v.detection.class_name)
-                        vehicle_img, _, _ = crop_box_asymmetric(
-                            frame.image, vx1, vy1, vx2, vy2, pad_l, pad_t, pad_r, pad_b
-                        )
-                        if vehicle_img.size:
-                            open_crops[v.track_id] = {
-                                "image": vehicle_img,
-                                "frame": frame.index,
-                                "vehicle_box": {"x1": vx1, "y1": vy1, "x2": vx2, "y2": vy2},
-                            }
+                box = v.detection.bounding_box
+                area = float(box.area)
+                peak_area = max(float(info.get("peak_area") or 0.0), area)
+                info["peak_area"] = peak_area
+                # Still near the largest box seen: the vehicle has not started moving away.
+                info["closing"] = area >= peak_area * 0.90
+                _cid, existing = _capture_for_vehicle(best_by_track, v.track_id)
+                if existing is not None:
+                    existing["closing"] = bool(info["closing"])
+                    existing["peak_vehicle_area"] = peak_area
+                previous_crop = open_crops.get(v.track_id)
+                nearer = previous_crop is None or area > float(previous_crop.get("area") or 0.0)
+                if nearer and area >= MIN_PLATE_SEARCH_AREA and box.width >= MIN_PLATE_SEARCH_WIDTH:
+                    vx1, vy1, vx2, vy2 = box.clip(meta.width, meta.height).as_int()
+                    pad_l, pad_t, pad_r, pad_b = vehicle_capture_pads(v.detection.class_name)
+                    vehicle_img, _, _ = crop_box_asymmetric(
+                        frame.image, vx1, vy1, vx2, vy2, pad_l, pad_t, pad_r, pad_b
+                    )
+                    if vehicle_img.size:
+                        open_crops[v.track_id] = {
+                            "image": vehicle_img,
+                            "image_full": frame.image.copy(),
+                            "frame": frame.index,
+                            "area": area,
+                            "vehicle_box": {"x1": vx1, "y1": vy1, "x2": vx2, "y2": vy2},
+                        }
 
             frame_crops: list[dict[str, Any]] = []
             for vehicle, plate in associated_native:
@@ -957,6 +1009,7 @@ def process_job(db: Session, job_id: UUID) -> None:
                     if saved_plate.size == 0:
                         saved_plate = plate_img
                     vehicle_box = {"x1": vx1, "y1": vy1, "x2": vx2, "y2": vy2}
+                    vehicle_area = float(max(0, vx2 - vx1) * max(0, vy2 - vy1))
                     previous = best_by_track.get(vehicle.track_id)
                     if previous is None:
                         merged_id = find_same_passage(
@@ -991,6 +1044,7 @@ def process_job(db: Session, job_id: UUID) -> None:
                             "exposure_score": metrics.exposure_score,
                             "geometry_score": metrics.geometry_score,
                             "total_score": metrics.total_score,
+                            "vehicle_area": vehicle_area,
                             "image_plate": saved_plate.copy(),
                             "image_vehicle": vehicle_img.copy() if vehicle_img.size else None,
                         },
@@ -1029,6 +1083,7 @@ def process_job(db: Session, job_id: UUID) -> None:
                             "vehicle_type": vehicle.detection.class_name,
                             "plate_box": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
                             "vehicle_box": vehicle_box,
+                            "vehicle_area": vehicle_area,
                             "image_full": frame.image,
                             "image_vehicle": vehicle_img,
                             "image_plate": saved_plate,
@@ -1037,11 +1092,14 @@ def process_job(db: Session, job_id: UUID) -> None:
                             "active_tid": vehicle.track_id,
                         },
                     )
-                    open_crops.pop(capture_id, None)
-                    open_crops.pop(vehicle.track_id, None)
+                    passage = vehicle_meta.get(vehicle.track_id) or {}
+                    best_by_track[capture_id]["closing"] = bool(passage.get("closing", True))
+                    if passage.get("peak_area") is not None:
+                        best_by_track[capture_id]["peak_vehicle_area"] = passage["peak_area"]
 
             _collapse_captures(best_by_track, candidate_store)
             _apply_store_winners(best_by_track, candidate_store)
+            _apply_closest_vehicles(best_by_track, open_crops)
             published_now = _publish_due_captures(
                 captures_dir,
                 vehicles,

@@ -358,11 +358,13 @@ def consider_plate_candidate(
     quality = float(candidate["quality"])
     prev_quality = _quality_of(previous)
     alts = list(previous.get("alternates") or [])
-    candidate_good = _good_evidence(candidate)
-    previous_good = _good_evidence(previous)
-    # A plate wide enough to resolve strokes beats a sharper but tiny crop.
-    replace = (candidate_good and not previous_good) or (
-        candidate_good == previous_good and quality > prev_quality
+    from app.pipeline.candidates import plate_is_closer_view
+
+    # Wider plate = closer to the camera. That beats the first far frame of an
+    # approach and the last far frame of a departure.
+    replace = plate_is_closer_view(
+        {**candidate, "total_score": quality},
+        {**previous, "total_score": prev_quality, "quality": prev_quality},
     )
     if replace:
         alts.append(_quality_snapshot(previous, owned=True))

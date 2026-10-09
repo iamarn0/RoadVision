@@ -11,14 +11,52 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+# A plate this much wider is a closer view. Smaller gaps are the same distance,
+# so sharpness still breaks the tie.
+CLOSER_WIDTH_RATIO = 1.12
+
+
 def _score(item: dict[str, Any]) -> float:
     return float(item.get("total_score") or item.get("quality") or 0.0)
 
 
-def _rank_key(item: dict[str, Any]) -> tuple[int, float]:
+def _plate_width(item: dict[str, Any]) -> float:
+    width = item.get("plate_width")
+    if width is None:
+        return 0.0
+    return float(width)
+
+
+def _is_good(item: dict[str, Any]) -> bool:
     from app.preprocessing.quality import is_good_plate_evidence
 
-    return (1 if is_good_plate_evidence(item) else 0, _score(item))
+    return is_good_plate_evidence(item)
+
+
+def plate_is_closer_view(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
+    """True when the candidate is the frame to keep.
+
+    Approaching traffic is worst on the first frame and departing traffic is
+    worst on the last frame. Plate width grows as the vehicle nears the camera,
+    so a clearly wider plate replaces a sharper but farther crop.
+    """
+    candidate_good = _is_good(candidate)
+    current_good = _is_good(current)
+    if candidate_good != current_good:
+        return candidate_good
+    candidate_width = _plate_width(candidate)
+    current_width = _plate_width(current)
+    if candidate_width <= 0.0 and current_width <= 0.0:
+        return _score(candidate) > _score(current)
+    if candidate_width > current_width * CLOSER_WIDTH_RATIO:
+        return True
+    if current_width > candidate_width * CLOSER_WIDTH_RATIO:
+        return False
+    return _score(candidate) > _score(current)
+
+
+def _keep_key(item: dict[str, Any]) -> tuple[int, float, float]:
+    return (1 if _is_good(item) else 0, _plate_width(item), _score(item))
 
 
 @dataclass
@@ -59,7 +97,7 @@ class PlateCandidateStore:
             return
         st.valid += 1
         st.candidates.append(candidate)
-        st.candidates.sort(key=_rank_key, reverse=True)
+        st.candidates.sort(key=_keep_key, reverse=True)
         if len(st.candidates) > self.top_n:
             st.candidates = st.candidates[: self.top_n]
 
@@ -73,12 +111,20 @@ class PlateCandidateStore:
         dest.max_width = max(dest.max_width, src.max_width)
         dest.max_height = max(dest.max_height, src.max_height)
         dest.candidates.extend(src.candidates)
-        dest.candidates.sort(key=_rank_key, reverse=True)
+        dest.candidates.sort(key=_keep_key, reverse=True)
         dest.candidates = dest.candidates[: self.top_n]
 
     def winner(self, track_id: int) -> dict[str, Any] | None:
-        cands = self.state(track_id).candidates
-        return cands[0] if cands else None
+        cands = list(self.state(track_id).candidates)
+        if not cands:
+            return None
+        good = [item for item in cands if _is_good(item)]
+        pool = good or cands
+        widest = max(_plate_width(item) for item in pool)
+        if widest <= 0.0:
+            return max(pool, key=_score)
+        near = [item for item in pool if _plate_width(item) >= widest / CLOSER_WIDTH_RATIO]
+        return max(near, key=_score)
 
     def items(self) -> list[tuple[int, TrackCandidateState]]:
         return list(self._tracks.items())
