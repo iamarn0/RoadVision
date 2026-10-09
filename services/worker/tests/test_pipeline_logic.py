@@ -874,6 +874,14 @@ def test_departing_truck_without_plate_is_still_saved(tmp_path) -> None:
     assert (tmp_path / "vehicle_4.jpg").is_file()
 
 
+def test_overlay_index_allows_vehicle_without_plate() -> None:
+    from app.pipeline.runner import _overlay_capture_index
+
+    index = _overlay_capture_index({4: {"vehicle_only": True}, 5: {"plate_confidence": 0.4}})
+    assert index[4]["plate_confidence"] is None
+    assert index[5]["plate_confidence"] == 0.4
+
+
 def test_night_tracker_can_open_on_a_dim_truck() -> None:
     from app.tracking.tracker import TRACKER_CONFIG
 

@@ -500,6 +500,14 @@ def _publish_due_captures(
     return written
 
 
+def _overlay_capture_index(best_by_track: dict[int, dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    """Vehicle-only rows have no plate score. The overlay must not require one."""
+    return {
+        tid: {"plate_confidence": capture.get("plate_confidence")}
+        for tid, capture in best_by_track.items()
+    }
+
+
 def _publish_all_pending(
     captures_dir: Path,
     best_by_track: dict[int, dict[str, Any]],
@@ -1183,7 +1191,7 @@ def process_job(db: Session, job_id: UUID) -> None:
                 working,
                 vehicles_work,
                 attached_work,
-                {tid: {"plate_confidence": cap["plate_confidence"]} for tid, cap in best_by_track.items()},
+                _overlay_capture_index(best_by_track),
                 frame.timestamp,
                 loose_plates=loose_work,
             )
