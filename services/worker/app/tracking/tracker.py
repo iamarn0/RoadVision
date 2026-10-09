@@ -1,11 +1,15 @@
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
 from app.pipeline.geometry import Detection
 
 logger = logging.getLogger("worker")
+
+# Stock ByteTrack will not open a track below 0.25. Departing trucks at night sit under that.
+TRACKER_CONFIG = Path(__file__).with_name("bytetrack_cctv.yaml")
 
 
 @dataclass
@@ -42,7 +46,7 @@ class VehicleTracker:
                     imgsz=self.detector.image_size,
                     device=self.detector.device,
                     half=self.detector.half,
-                    tracker="bytetrack.yaml",
+                    tracker=str(TRACKER_CONFIG),
                     verbose=False,
                 )
                 tracked: list[TrackedVehicle] = []

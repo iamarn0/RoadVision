@@ -191,7 +191,8 @@ def _preview_size(width: int, height: int, max_width: int = 1280) -> tuple[int, 
 # Running the models on every source frame is what turns a 5 s / 100-frame
 # clip into the better part of a minute.
 DETECT_FPS = 4.0
-NIGHT_VEHICLE_CONFIDENCE = 0.15
+# Dim rear of a truck leaving the camera. 0.15 still never reached the tracker gate.
+NIGHT_VEHICLE_CONFIDENCE = 0.08
 
 
 def _playback_strides(source_fps: float, *, behind: bool = False) -> tuple[int, int, int, float]:
@@ -430,14 +431,56 @@ def _collapse_captures(
             candidate_store.merge(keep_id, drop_id)
 
 
+def _promote_unplated_departures(
+    best_by_track: dict[int, dict[str, Any]],
+    open_crops: dict[int, dict[str, Any]],
+    active: set[int],
+    now_ts: float,
+) -> None:
+    """A truck that leaves without a readable plate still gets its closest vehicle photo."""
+    for track_id, crop in list(open_crops.items()):
+        if track_id in active:
+            continue
+        if _capture_for_vehicle(best_by_track, track_id)[1] is not None:
+            continue
+        image = crop.get("image")
+        if image is None or getattr(image, "size", 0) == 0:
+            continue
+        last = float(crop.get("last_seen") or 0.0)
+        hold = APPROACH_HOLD_SECONDS if crop.get("closing") else PUBLISH_UNSEEN_SECONDS
+        if now_ts - last < hold:
+            continue
+        best_by_track[track_id] = {
+            "image_vehicle": image,
+            "image_full": crop.get("image_full"),
+            "image_plate": None,
+            "first_seen": float(crop.get("first_seen") or last),
+            "last_seen": last,
+            "vehicle_type": crop.get("vehicle_type"),
+            "vehicle_confidence": crop.get("conf"),
+            "published": False,
+            "vehicle_only": True,
+            "source_ids": {track_id},
+            "active_tid": track_id,
+            "best_frame": crop.get("frame"),
+            "vehicle_frame": crop.get("frame"),
+            "vehicle_box": crop.get("vehicle_box"),
+            "vehicle_area": crop.get("area"),
+            "closing": False,
+        }
+
+
 def _publish_due_captures(
     captures_dir: Path,
     vehicles: list[Any],
     best_by_track: dict[int, dict[str, Any]],
     overlay_clock: dict[str, Any] | None,
     now_ts: float,
+    open_crops: dict[int, dict[str, Any]] | None = None,
 ) -> int:
     active = {v.track_id for v in vehicles}
+    if open_crops is not None:
+        _promote_unplated_departures(best_by_track, open_crops, active, now_ts)
     for vehicle in vehicles:
         _cid, capture = _capture_for_vehicle(best_by_track, vehicle.track_id)
         if capture is None:
@@ -961,7 +1004,11 @@ def process_job(db: Session, job_id: UUID) -> None:
                 if existing is not None:
                     existing["closing"] = bool(info["closing"])
                     existing["peak_vehicle_area"] = peak_area
+                seen = float(frame.timestamp if frame.timestamp is not None else video_ts)
                 previous_crop = open_crops.get(v.track_id)
+                if previous_crop is not None:
+                    previous_crop["last_seen"] = seen
+                    previous_crop["closing"] = bool(info["closing"])
                 nearer = previous_crop is None or area > float(previous_crop.get("area") or 0.0)
                 if nearer and area >= MIN_PLATE_SEARCH_AREA and box.width >= MIN_PLATE_SEARCH_WIDTH:
                     vx1, vy1, vx2, vy2 = box.clip(meta.width, meta.height).as_int()
@@ -976,6 +1023,11 @@ def process_job(db: Session, job_id: UUID) -> None:
                             "frame": frame.index,
                             "area": area,
                             "vehicle_box": {"x1": vx1, "y1": vy1, "x2": vx2, "y2": vy2},
+                            "first_seen": float(info.get("first_seen") or seen),
+                            "last_seen": seen,
+                            "vehicle_type": v.detection.class_name,
+                            "conf": v.detection.confidence,
+                            "closing": bool(info["closing"]),
                         }
 
             frame_crops: list[dict[str, Any]] = []
@@ -1106,6 +1158,7 @@ def process_job(db: Session, job_id: UUID) -> None:
                 best_by_track,
                 overlay_clock,
                 float(frame.timestamp if frame.timestamp is not None else video_ts),
+                open_crops,
             )
             if published_now:
                 index_dirty += 1

@@ -845,6 +845,43 @@ def test_consider_keeps_closer_plate_for_approach_and_departure() -> None:
     assert capture["plate_width"] == 150
 
 
+def test_departing_truck_without_plate_is_still_saved(tmp_path) -> None:
+    import numpy as np
+    from app.pipeline.runner import _promote_unplated_departures, _publish_due_captures
+
+    truck = np.zeros((40, 60, 3), dtype=np.uint8)
+    crops = {
+        4: {
+            "image": truck,
+            "image_full": truck,
+            "frame": 10,
+            "area": 8000.0,
+            "vehicle_box": {"x1": 1, "y1": 2, "x2": 30, "y2": 40},
+            "first_seen": 1.0,
+            "last_seen": 2.0,
+            "vehicle_type": "truck",
+            "conf": 0.22,
+            "closing": False,
+        }
+    }
+    best: dict = {}
+    _promote_unplated_departures(best, crops, active=set(), now_ts=2.2)
+    assert 4 not in best
+    _promote_unplated_departures(best, crops, active=set(), now_ts=2.6)
+    assert best[4]["vehicle_only"] is True
+    assert best[4]["vehicle_type"] == "truck"
+    assert _publish_due_captures(tmp_path, [], best, None, 2.6, crops) == 1
+    assert (tmp_path / "vehicle_4.jpg").is_file()
+
+
+def test_night_tracker_can_open_on_a_dim_truck() -> None:
+    from app.tracking.tracker import TRACKER_CONFIG
+
+    text = TRACKER_CONFIG.read_text(encoding="utf-8")
+    assert "new_track_thresh: 0.10" in text
+    assert "track_high_thresh: 0.12" in text
+
+
 def test_approach_holds_publish_until_vehicle_stops_closing() -> None:
     from app.pipeline.runner import capture_is_due_to_publish
 
