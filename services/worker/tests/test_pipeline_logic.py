@@ -833,6 +833,24 @@ def test_public_error_includes_exception_type() -> None:
     assert "Unable to open video" in message
 
 
+def test_install_playable_annotated_replaces_mpeg4_file(tmp_path, monkeypatch) -> None:
+    from app.pipeline import runner as pipeline_runner
+    from packages.video_normalize import PlayableVideo
+
+    src = tmp_path / "job.mp4"
+    src.write_bytes(b"mpeg4")
+    playable = tmp_path / "job.playable.mp4"
+    playable.write_bytes(b"h264-bytes")
+
+    def fake(_path):
+        return PlayableVideo(path=playable, replaced_path=src, codec="h264")
+
+    monkeypatch.setattr(pipeline_runner, "ensure_playable_mp4", fake)
+    pipeline_runner._install_playable_annotated(src)
+    assert src.read_bytes() == b"h264-bytes"
+    assert not playable.exists()
+
+
 def test_annotated_writer_accepts_odd_frame_size(tmp_path) -> None:
     import numpy as np
     from app.rendering.annotate import AnnotatedVideoRenderer

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -46,8 +47,36 @@ class PlayableVideo:
     codec: str | None = None
 
 
+def ffmpeg_exe() -> str | None:
+    """ffmpeg on PATH, or the binary shipped with imageio-ffmpeg."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        return None
+    try:
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+    return exe if exe and Path(exe).is_file() else None
+
+
+def ffprobe_exe() -> str | None:
+    found = shutil.which("ffprobe")
+    if found:
+        return found
+    ffmpeg = ffmpeg_exe()
+    if not ffmpeg:
+        return None
+    name = "ffprobe.exe" if Path(ffmpeg).suffix.lower() == ".exe" else "ffprobe"
+    sibling = Path(ffmpeg).with_name(name)
+    return str(sibling) if sibling.is_file() else None
+
+
 def ffmpeg_available() -> bool:
-    return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
+    return ffmpeg_exe() is not None
 
 
 def parse_rate(value: str | None) -> float | None:
@@ -192,7 +221,7 @@ def video_filter(probe: VideoProbe) -> str:
 
 
 def ffmpeg_command(action: str, src: Path, dest: Path, probe: VideoProbe) -> list[str]:
-    base = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(src), "-map", "0:v:0", "-an"]
+    base = [ffmpeg_exe() or "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(src), "-map", "0:v:0", "-an"]
     if action == "remux":
         return [*base, "-c:v", "copy", "-movflags", "+faststart", str(dest)]
     return [
@@ -230,30 +259,76 @@ def _run(cmd: list[str]) -> None:
         raise VideoNormalizeError(detail[-800:])
 
 
+def probe_from_ffmpeg_banner(text: str) -> VideoProbe:
+    """Read codec and size from `ffmpeg -i` when ffprobe is not installed."""
+    duration = None
+    clock = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", text)
+    if clock:
+        duration = int(clock.group(1)) * 3600 + int(clock.group(2)) * 60 + float(clock.group(3))
+    stream = next((line for line in text.splitlines() if "Video:" in line), None)
+    if not stream:
+        raise VideoNormalizeError("No video stream found")
+    codec_match = re.search(r"Video:\s*([A-Za-z0-9_]+)", stream)
+    pix_match = re.search(r"\b(yuv[0-9a-z]+|nv12|nv21|rgb24|bgr24|gray)\b", stream, re.IGNORECASE)
+    size_match = re.search(r"(\d{2,})x(\d{2,})", stream)
+    fps_match = re.search(r"(\d+(?:\.\d+)?)\s+fps", stream)
+    if not codec_match or not size_match:
+        raise VideoNormalizeError("Could not read the video stream")
+    fps = float(fps_match.group(1)) if fps_match else None
+    frame_count = int(duration * fps) if duration and fps else None
+    rotation = 0
+    turned = re.search(r"rotation of (-?\d+(?:\.\d+)?)\s+degrees", text)
+    if turned:
+        rotation = int(float(turned.group(1))) % 360
+    return VideoProbe(
+        codec=codec_match.group(1),
+        pix_fmt=pix_match.group(1) if pix_match else None,
+        width=int(size_match.group(1)),
+        height=int(size_match.group(2)),
+        fps=fps,
+        frame_count=frame_count,
+        duration=duration,
+        rotation=rotation,
+        variable_frame_rate=False,
+    )
+
+
 def _probe_file(path: Path) -> VideoProbe:
+    probe = ffprobe_exe()
+    if probe:
+        proc = subprocess.run(
+            [
+                probe,
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            detail = (proc.stderr or "ffprobe failed").strip()
+            raise VideoNormalizeError(detail[-800:])
+        try:
+            data = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise VideoNormalizeError("ffprobe returned invalid JSON") from exc
+        return probe_from_ffprobe(data)
+    ffmpeg = ffmpeg_exe()
+    if not ffmpeg:
+        raise VideoNormalizeError("ffmpeg is not installed")
     proc = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-print_format",
-            "json",
-            "-show_format",
-            "-show_streams",
-            str(path),
-        ],
+        [ffmpeg, "-hide_banner", "-i", str(path)],
         capture_output=True,
         text=True,
         check=False,
     )
-    if proc.returncode != 0:
-        detail = (proc.stderr or "ffprobe failed").strip()
-        raise VideoNormalizeError(detail[-800:])
-    try:
-        data = json.loads(proc.stdout or "{}")
-    except json.JSONDecodeError as exc:
-        raise VideoNormalizeError("ffprobe returned invalid JSON") from exc
-    return probe_from_ffprobe(data)
+    return probe_from_ffmpeg_banner(proc.stderr or proc.stdout or "")
 
 
 def ensure_playable_mp4(path: Path) -> PlayableVideo:
@@ -261,7 +336,7 @@ def ensure_playable_mp4(path: Path) -> PlayableVideo:
     if not path.is_file():
         raise VideoNormalizeError(f"Video file is missing: {path}")
     if not ffmpeg_available():
-        logger.warning("ffmpeg is not installed; playing the original file as uploaded")
+        logger.warning("ffmpeg is not installed; the browser cannot play this video")
         return PlayableVideo(path=path)
     try:
         probe = _probe_file(path)
@@ -296,3 +371,18 @@ def ensure_playable_mp4(path: Path) -> PlayableVideo:
         duration=prepared.duration or probe.duration,
         codec="h264",
     )
+
+
+def playable_copy(path: Path) -> Path:
+    """H.264 faststart file for the browser. Reuses a cached copy beside the source."""
+    if not path.is_file() or path.suffix.lower() not in {".mp4", ".m4v", ".mov", ".mkv", ".avi", ".webm"}:
+        return path
+    dest = output_path(path)
+    try:
+        source_mtime = path.stat().st_mtime
+        if dest.is_file() and dest.stat().st_size > 0 and dest.stat().st_mtime >= source_mtime:
+            return dest
+    except OSError:
+        return path
+    prepared = ensure_playable_mp4(path)
+    return prepared.path if prepared.path.is_file() else path

@@ -3,6 +3,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse
 
+from packages.video_normalize import playable_copy
+
 from app.database import get_db
 from app.repositories.core import AssetRepository
 from app.security.deps import RequireReader
@@ -39,4 +41,13 @@ def get_media(asset_id: UUID, user: RequireReader, db: Session = Depends(get_db)
     asset = require_asset_scope(db, AssetRepository(db).get(asset_id), scoped_district_ids(db, user))
     path = get_storage().get_path(asset.storage_key)
     mime = media_content_type(path.name, asset.mime_type)
-    return FileResponse(path, media_type=mime, filename=path.name, content_disposition_type="inline")
+    if mime.startswith("video/"):
+        path = playable_copy(path)
+        mime = media_content_type(path.name, "video/mp4")
+    return FileResponse(
+        path,
+        media_type=mime,
+        filename=path.name,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "no-cache"},
+    )

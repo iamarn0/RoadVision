@@ -6,6 +6,7 @@ from packages.video_normalize import (
     ffmpeg_command,
     is_faststart_mp4,
     normalize_action,
+    probe_from_ffmpeg_banner,
     probe_from_ffprobe,
     video_filter,
 )
@@ -90,6 +91,19 @@ def test_transcode_command_bakes_rotation_and_drops_audio() -> None:
     remux = ffmpeg_command("remux", Path("in.mp4"), Path("out.mp4"), _probe())
     assert "copy" in remux
     assert "libx264" not in remux
+
+
+def test_ffmpeg_banner_reads_mpeg4_stream() -> None:
+    probe = probe_from_ffmpeg_banner(
+        "Duration: 00:00:12.50, start: 0.000000, bitrate: 800 kb/s\n"
+        "Stream #0:0: Video: mpeg4 (Simple Profile) (mp4v / 0x7634706D), yuv420p, 960x540, 508 kb/s, 8 fps, 8 tbr\n"
+    )
+    assert probe.codec == "mpeg4"
+    assert probe.pix_fmt == "yuv420p"
+    assert (probe.width, probe.height) == (960, 540)
+    assert probe.fps == 8.0
+    assert probe.duration == 12.5
+    assert normalize_action(Path("job.mp4"), probe, False) == "transcode"
 
 
 def test_missing_ffmpeg_keeps_the_uploaded_file(tmp_path: Path, monkeypatch) -> None:

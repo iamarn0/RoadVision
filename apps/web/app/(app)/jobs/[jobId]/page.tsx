@@ -576,9 +576,18 @@ export default function JobDetailPage() {
           <Card>
             <h2 className="mb-3 text-sm font-medium">Annotated video</h2>
             {annotated ? (
-              <video controls className="max-h-[480px] w-full bg-black" src={annotated}>
-                <track kind="captions" />
-              </video>
+              <div className="aspect-video bg-black">
+                <video
+                  key={annotated}
+                  controls
+                  playsInline
+                  preload="auto"
+                  className="h-full w-full object-contain"
+                  src={`${annotated}?playable=1`}
+                >
+                  <track kind="captions" />
+                </video>
+              </div>
             ) : (
               <p className="text-sm text-[var(--muted)]">Annotated video is not available.</p>
             )}

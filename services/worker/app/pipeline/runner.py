@@ -500,6 +500,21 @@ def _storage_file(storage_root: Path, storage_key: str) -> Path:
     return storage_root / rel
 
 
+def _install_playable_annotated(path: Path) -> None:
+    """Replace the OpenCV MPEG-4 file with H.264 so the browser can play it."""
+    if not path.is_file() or path.stat().st_size <= 0:
+        return
+    prepared = ensure_playable_mp4(path)
+    if prepared.path.resolve() == path.resolve():
+        return
+    replacement = prepared.path
+    try:
+        path.unlink()
+        replacement.replace(path)
+    except OSError:
+        logger.exception("could not replace annotated video with a browser-playable copy")
+
+
 def _apply_playable_video(db: Session, video: Video, storage_root: Path, prepared: PlayableVideo) -> Path:
     if prepared.replaced_path is None:
         return prepared.path
@@ -1132,6 +1147,10 @@ def process_job(db: Session, job_id: UUID) -> None:
             final_index=final_index,
         )
         db.commit()
+        if renderer is not None:
+            renderer.close()
+            renderer = None
+        _install_playable_annotated(annotated_path)
         plate_stats = diag_summary.get("plates") or {}
         _persist(
             db,
