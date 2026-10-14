@@ -1,7 +1,10 @@
+import logging
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger("worker")
 
 NIGHT_LUMINANCE_MAX = 95.0
 ROI_ENHANCE_LUMINANCE_MAX = 110.0
@@ -9,25 +12,33 @@ HIGH_EVIDENCE_SCORE = 0.62
 JPEG_EVIDENCE_QUALITY = 98
 JPEG_PLATE_QUALITY = 100
 PLATE_CROP_PAD_DAY = 0.22
-PLATE_CROP_PAD_NIGHT = 0.28
+# Same night margin as the previous working capture path. 0.12 pulled the
+# neighbouring headlight into the saved crop.
+PLATE_CROP_PAD_NIGHT = 0.08
 VEHICLE_CROP_PAD = 0.16
 
 
-def save_jpeg(path: Path | str, image: np.ndarray, quality: int = JPEG_EVIDENCE_QUALITY) -> None:
+def save_jpeg(path: Path | str, image: np.ndarray, quality: int = JPEG_EVIDENCE_QUALITY) -> bool:
     import cv2
 
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(dest), image, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
+    ok = bool(cv2.imwrite(str(dest), image, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)]))
+    if not ok:
+        logger.warning("failed to write jpeg %s", dest)
+    return ok
 
 
-def save_png(path: Path | str, image: np.ndarray) -> None:
+def save_png(path: Path | str, image: np.ndarray) -> bool:
     """Lossless copy of the native crop. Used for debug and the evidence plate."""
     import cv2
 
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(dest), image)
+    ok = bool(cv2.imwrite(str(dest), image))
+    if not ok:
+        logger.warning("failed to write png %s", dest)
+    return ok
 
 
 def preprocess_plate(image: np.ndarray, variant: str = "default") -> np.ndarray:
@@ -74,18 +85,103 @@ def enhance_low_light_frame(image: np.ndarray) -> np.ndarray:
 
 
 def enhance_night_plate_crop(image: np.ndarray) -> np.ndarray:
-    """Mild denoise + contrast on the native crop. Never upscale (that makes IR plates look hazy)."""
+    """Mild denoise + local contrast on the native crop. Never upscale.
+
+    This is the previous working night recipe. It is not the detector input.
+    Saved evidence uses it only when the plate core gets both sharper and
+    more contrasted without growing the blown-out area.
+    """
     import cv2
 
     if image.size == 0:
         return image
-    denoised = cv2.bilateralFilter(image, 5, 40, 40)
+    work = image
+    if work.ndim == 2:
+        work = cv2.cvtColor(work, cv2.COLOR_GRAY2BGR)
+    height, width = work.shape[:2]
+    if width < 8 or height < 8:
+        return work
+    denoised = cv2.bilateralFilter(work, 5, 40, 40)
     lab = cv2.cvtColor(denoised, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
     l_ch = cv2.createCLAHE(clipLimit=1.4, tileGridSize=(4, 4)).apply(l_ch)
     enhanced = cv2.cvtColor(cv2.merge((l_ch, a_ch, b_ch)), cv2.COLOR_LAB2BGR)
     blur = cv2.GaussianBlur(enhanced, (0, 0), 0.8)
-    return cv2.addWeighted(enhanced, 1.25, blur, -0.25, 0)
+    sharpened = cv2.addWeighted(enhanced, 1.25, blur, -0.25, 0)
+    return np.clip(sharpened, 0, 255).astype(np.uint8)
+
+
+def readability_score(image: np.ndarray) -> float:
+    """Prefer real glyph contrast over Laplacian noise from over-sharpening."""
+    from app.preprocessing.quality import brightness_value, saturation_ratio
+
+    if image.size == 0:
+        return -1.0
+    _sharp, contrast, _mean, edge_density, components = plate_structure_metrics(image)
+    sat = float(saturation_ratio(image))
+    exposure = max(0.0, 1.0 - abs(brightness_value(image) - 128.0) / 128.0)
+    return (
+        0.40 * min(1.0, contrast / 40.0)
+        + 0.25 * min(1.0, edge_density / 0.12)
+        + 0.20 * min(1.0, components / 4.0)
+        + 0.15 * (1.0 - sat) * exposure
+    )
+
+
+def _plate_core(image: np.ndarray) -> np.ndarray:
+    """Inner plate, excluding the padded margin where a headlight usually sits."""
+    height, width = image.shape[:2]
+    y0 = int(height * 0.12)
+    y1 = max(int(height * 0.88), y0 + 1)
+    x0 = int(width * 0.08)
+    x1 = max(int(width * 0.92), x0 + 1)
+    return image[y0:y1, x0:x1]
+
+
+def enhance_plate_for_readability(image: np.ndarray, dark: bool = False) -> np.ndarray:
+    """Day crops stay native. Night crops get the previous recipe, still at native size."""
+    import cv2
+
+    if image.size == 0:
+        return image
+    work = image if image.ndim == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    if not dark:
+        return work
+    return enhance_night_plate_crop(work)
+
+
+def choose_readable_plate(original: np.ndarray, dark: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    """Return (display crop, original crop).
+
+    Best-frame ranking stays on the original crop. The display JPEG is replaced
+    only when the night recipe raises both core sharpness and core contrast
+    without growing the clipped highlight area.
+    """
+    from app.preprocessing.quality import saturation_ratio
+
+    if original is None or getattr(original, "size", 0) == 0:
+        return original, original
+    native = original.copy() if hasattr(original, "copy") else original
+    if not dark:
+        return native, native
+    enhanced = enhance_night_plate_crop(native)
+    if enhanced.shape != native.shape or np.array_equal(enhanced, native):
+        return native, native
+    if float(saturation_ratio(enhanced)) > float(saturation_ratio(native)) + 0.02:
+        return native, native
+    native_core = _plate_core(native)
+    enhanced_core = _plate_core(enhanced)
+    native_sharp, native_contrast, _, _, _ = plate_structure_metrics(native_core)
+    enhanced_sharp, enhanced_contrast, _, _, _ = plate_structure_metrics(enhanced_core)
+    if enhanced_sharp <= native_sharp or enhanced_contrast < native_contrast * 1.05:
+        return native, native
+    native_gray = _gray(native_core)
+    enhanced_gray = _gray(enhanced_core)
+    native_hot = float((native_gray >= 230).mean())
+    enhanced_hot = float((enhanced_gray >= 230).mean())
+    if enhanced_hot > native_hot + 0.02:
+        return native, native
+    return enhanced, native
 
 
 def _gray(image: np.ndarray) -> np.ndarray:
@@ -184,9 +280,25 @@ def is_hard_false_positive(
         return True
     if mean < 12 and contrast < 8:
         return True
-    if components == 0 and contrast < 14 and sharp < 12:
+    if components == 0 and contrast < 18:
         return True
+    _ = sharp
     return False
+
+
+def crop_has_number_plate(
+    image: np.ndarray,
+    box_width: float,
+    box_height: float,
+    plate_confidence: float,
+) -> bool:
+    """True only when the crop has letter-like structure, not a headlight or empty bumper."""
+    if image is None or getattr(image, "size", 0) == 0:
+        return False
+    if is_hard_false_positive(image, box_width, box_height, plate_confidence):
+        return False
+    _sharp, _contrast, _mean, _edge, components = plate_structure_metrics(image)
+    return components >= 1
 
 
 def readable_plate_limits(frame_width: float, dark: bool = False) -> tuple[float, float, float]:
@@ -308,7 +420,9 @@ def _winner_fields(candidate: dict[str, Any]) -> dict[str, Any]:
         "image_full": full,
         "image_vehicle": candidate.get("image_vehicle"),
         "image_plate": candidate.get("image_plate"),
+        "image_plate_original": candidate.get("image_plate_original"),
         "good_evidence": _good_evidence(candidate),
+        "enhanced": bool(candidate.get("enhanced")),
     }
 
 

@@ -59,7 +59,8 @@ function CapturesTable({
   compact?: boolean;
   onOpen: (item: LiveCaptureItem) => void;
 }) {
-  const rows = [...items].sort((a, b) => {
+  const listed = items.filter((item) => !isVehicleOnly(item));
+  const rows = [...listed].sort((a, b) => {
     const delta = captureTimeValue(b) - captureTimeValue(a);
     return sort === "oldest" ? -delta : delta;
   });

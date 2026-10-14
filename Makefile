@@ -1,6 +1,6 @@
 APP_VERSION := 0.1.0
 
-.PHONY: help env web-install api-test worker-test compose-up compose-down lint
+.PHONY: help env web-install api-test worker-test web-test test compose-up compose-down lint
 
 help:
 	@echo RoadVision $(APP_VERSION)
@@ -9,6 +9,8 @@ help:
 	@echo   web-install    Install frontend dependencies
 	@echo   api-test       Run API tests
 	@echo   worker-test    Run worker tests
+	@echo   web-test       Run frontend tests
+	@echo   test           Run API, worker, and web tests
 	@echo   compose-up     Build and start Docker Compose
 	@echo   compose-down   Stop Docker Compose
 
@@ -23,6 +25,11 @@ api-test:
 
 worker-test:
 	cd services/worker && python -m pytest tests -q
+
+web-test:
+	cd apps/web && npm test
+
+test: api-test worker-test web-test
 
 compose-up:
 	docker compose up --build

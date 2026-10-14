@@ -36,15 +36,17 @@ from app.preprocessing.plates import (
     PLATE_CROP_PAD_DAY,
     PLATE_CROP_PAD_NIGHT,
     ROI_ENHANCE_LUMINANCE_MAX,
+    choose_readable_plate,
     consider_plate_candidate,
     crop_box,
     crop_box_asymmetric,
+    crop_has_number_plate,
     enhance_low_light_frame,
     frame_luminance,
     save_jpeg,
     save_png,
 )
-from app.preprocessing.quality import READABLE_PLATE_WIDTH, evaluate_plate_crop
+from app.preprocessing.quality import READABLE_PLATE_WIDTH, evaluate_plate_crop, quality_reason_is_hard
 from app.rendering.annotate import AnnotatedVideoRenderer, draw_overlay
 from app.tracking.tracker import VehicleTracker
 from packages.db.enums import AssetType, ConfidenceStatus, JobStatus
@@ -53,6 +55,13 @@ from packages.device.probe import DeviceError, select_device
 from packages.video_normalize import PlayableVideo, ensure_playable_mp4
 
 logger = logging.getLogger("worker")
+
+# ByteTrack confirmation plus a short look. 1-frame IDs are flicker, not vehicles.
+MIN_VEHICLE_FRAMES = 3
+STAGE_HEARTBEAT_SECONDS = 5.0
+REJECT_LOG_EVERY = 50
+
+_REDIS_CLIENTS: dict[str, Any] = {}
 
 
 class PipelineError(Exception):
@@ -69,10 +78,26 @@ def _public_error(exc: BaseException) -> str:
     return f"{exc.__class__.__name__}: {text}"
 
 
-def _control_client():
+def _redis_client(*, decode_responses: bool) -> Any:
+    """Reuse one client per mode. A new connection per frame can block once Redis hits maxclients."""
     import redis
 
-    return redis.Redis.from_url(get_settings().redis_url, decode_responses=True)
+    url = get_settings().redis_url
+    key = f"{url}|{int(decode_responses)}"
+    client = _REDIS_CLIENTS.get(key)
+    if client is None:
+        client = redis.Redis.from_url(
+            url,
+            decode_responses=decode_responses,
+            socket_connect_timeout=2.0,
+            socket_timeout=2.0,
+        )
+        _REDIS_CLIENTS[key] = client
+    return client
+
+
+def _control_client():
+    return _redis_client(decode_responses=True)
 
 
 def _cancelled(job_id: str) -> bool:
@@ -247,7 +272,7 @@ def _sync_captures_index(
             good_evidence=capture.get("good_evidence"),
         )
         for track_id, capture in best_by_track.items()
-        if capture.get("published")
+        if capture.get("published") and _capture_has_plate(capture)
     ]
     replace_plate_items(captures_dir, items, overlay_clock)
 
@@ -303,6 +328,13 @@ def _capture_view(capture: dict[str, Any]) -> tuple[Any, Any]:
     return (capture.get("best_frame"), capture.get("vehicle_frame"))
 
 
+def _capture_has_plate(capture: dict[str, Any]) -> bool:
+    if capture.get("vehicle_only"):
+        return False
+    plate = capture.get("image_plate")
+    return plate is not None and getattr(plate, "size", 0) > 0
+
+
 def _publish_track_capture(
     captures_dir: Path,
     capture_id: int,
@@ -315,18 +347,29 @@ def _publish_track_capture(
     plate = capture.get("image_plate")
     vehicle_img = capture.get("image_vehicle")
     full = capture.get("image_full")
-    has_plate = plate is not None and getattr(plate, "size", 0) > 0
+    has_plate = _capture_has_plate(capture)
     has_vehicle = vehicle_img is not None and getattr(vehicle_img, "size", 0) > 0
-    if not has_plate and not has_vehicle:
-        capture["published"] = True
+    if not has_plate:
         return False
-    if has_plate:
-        save_jpeg(captures_dir / f"track_{capture_id}.jpg", plate, JPEG_PLATE_QUALITY)
-        save_png(captures_dir / f"track_{capture_id}.png", plate)
-    if has_vehicle:
-        save_jpeg(captures_dir / f"vehicle_{capture_id}.jpg", vehicle_img, JPEG_EVIDENCE_QUALITY)
-    if full is not None and getattr(full, "size", 0) > 0:
-        save_jpeg(captures_dir / f"full_{capture_id}.jpg", full, JPEG_EVIDENCE_QUALITY)
+    wrote = False
+    try:
+        if has_plate:
+            wrote = save_jpeg(captures_dir / f"track_{capture_id}.jpg", plate, JPEG_PLATE_QUALITY) or wrote
+            original = capture.get("image_plate_original")
+            evidence = original if original is not None and getattr(original, "size", 0) > 0 else plate
+            save_png(captures_dir / f"track_{capture_id}.png", evidence)
+        if has_vehicle:
+            wrote = save_jpeg(captures_dir / f"vehicle_{capture_id}.jpg", vehicle_img, JPEG_EVIDENCE_QUALITY) or wrote
+        if full is not None and getattr(full, "size", 0) > 0:
+            save_jpeg(captures_dir / f"full_{capture_id}.jpg", full, JPEG_EVIDENCE_QUALITY)
+    except Exception:
+        logger.exception("evidence save failed track=%s", capture_id)
+        capture["save_error"] = True
+        return False
+    if not wrote:
+        logger.warning("evidence save wrote no files track=%s", capture_id)
+        capture["save_error"] = True
+        return False
     for i, alt in enumerate((capture.get("alternates") or [])[:2], start=1):
         alt_plate = alt.get("image_plate")
         if alt_plate is None or getattr(alt_plate, "size", 0) == 0:
@@ -344,9 +387,6 @@ def _publish_track_capture(
         plate_width=capture.get("plate_width"),
         good_evidence=capture.get("good_evidence"),
     )
-    if capture.get("vehicle_only"):
-        sidecar["kind"] = "vehicle"
-        sidecar["vehicle_only"] = True
     (captures_dir / f"track_{capture_id}.json").write_text(json.dumps(sidecar), encoding="utf-8")
     capture["published"] = True
     capture["saved_view"] = view
@@ -366,6 +406,10 @@ def _apply_store_winners(
         if plate is None or getattr(plate, "size", 0) == 0:
             continue
         capture["image_plate"] = plate
+        if winner.get("image_plate_original") is not None:
+            capture["image_plate_original"] = winner["image_plate_original"]
+        if winner.get("enhanced") is not None:
+            capture["enhanced"] = bool(winner["enhanced"])
         if winner.get("image_vehicle") is not None:
             capture["image_vehicle"] = winner["image_vehicle"]
         capture["best_frame"] = int(winner.get("frame_number") or capture.get("best_frame") or 0)
@@ -432,37 +476,8 @@ def _promote_unplated_departures(
     active: set[int],
     now_ts: float,
 ) -> None:
-    """A truck that leaves without a readable plate still gets its closest vehicle photo."""
-    for track_id, crop in list(open_crops.items()):
-        if track_id in active:
-            continue
-        if _capture_for_vehicle(best_by_track, track_id)[1] is not None:
-            continue
-        image = crop.get("image")
-        if image is None or getattr(image, "size", 0) == 0:
-            continue
-        last = float(crop.get("last_seen") or 0.0)
-        hold = APPROACH_HOLD_SECONDS if crop.get("closing") else PUBLISH_UNSEEN_SECONDS
-        if now_ts - last < hold:
-            continue
-        best_by_track[track_id] = {
-            "image_vehicle": image,
-            "image_full": crop.get("image_full"),
-            "image_plate": None,
-            "first_seen": float(crop.get("first_seen") or last),
-            "last_seen": last,
-            "vehicle_type": crop.get("vehicle_type"),
-            "vehicle_confidence": crop.get("conf"),
-            "published": False,
-            "vehicle_only": True,
-            "source_ids": {track_id},
-            "active_tid": track_id,
-            "best_frame": crop.get("frame"),
-            "vehicle_frame": crop.get("frame"),
-            "vehicle_box": crop.get("vehicle_box"),
-            "vehicle_area": crop.get("area"),
-            "closing": False,
-        }
+    """Vehicles without a number plate are not added to the capture list."""
+    return
 
 
 def _publish_due_captures(
@@ -492,6 +507,8 @@ def _publish_due_captures(
         if capture_is_due_to_publish(capture, visible, now_ts):
             if _publish_track_capture(captures_dir, capture_id, capture, overlay_clock):
                 written += 1
+    if open_crops is not None:
+        _prune_open_crops(open_crops, active, now_ts)
     return written
 
 
@@ -522,34 +539,8 @@ def _queue_vehicles_still_in_frame(
     final_index: int,
     source_fps: float,
 ) -> None:
-    """Add a list row for vehicles still in frame when the clip ends, even with no plate."""
-    if final_index < 0:
-        return
-    fps = max(float(source_fps or 0.0), 1.0)
-    for track_id, crop_info in open_crops.items():
-        if _capture_for_vehicle(best_by_track, track_id)[1] is not None:
-            continue
-        image = crop_info.get("image")
-        if image is None or getattr(image, "size", 0) == 0:
-            continue
-        meta = vehicle_meta.get(track_id) or {}
-        last = int(meta.get("last_frame") if meta.get("last_frame") is not None else crop_info.get("frame") or 0)
-        if (final_index - last) / fps > END_STILL_VISIBLE_SECONDS:
-            continue
-        best_by_track[track_id] = {
-            "image_vehicle": image,
-            "image_plate": None,
-            "first_seen": float(meta.get("first_seen") or 0.0),
-            "last_seen": float(meta.get("last_seen") or meta.get("first_seen") or 0.0),
-            "vehicle_type": meta.get("type"),
-            "vehicle_confidence": meta.get("conf"),
-            "published": False,
-            "vehicle_only": True,
-            "source_ids": {track_id},
-            "active_tid": track_id,
-            "best_frame": last,
-            "vehicle_box": crop_info.get("vehicle_box"),
-        }
+    """End-of-clip vehicles without a plate stay off the capture list."""
+    return
 
 
 def _handle_manual_capture(job_id: str, captures_dir: Path, last_associated: list[dict[str, Any]]) -> None:
@@ -561,13 +552,79 @@ def _handle_manual_capture(job_id: str, captures_dir: Path, last_associated: lis
 
 def _publish_preview(job_id: UUID, jpeg_bytes: bytes, payload: dict[str, Any]) -> None:
     try:
-        import redis
-
-        client = redis.Redis.from_url(get_settings().redis_url)
+        client = _redis_client(decode_responses=False)
         client.set(f"roadvision:job:preview:{job_id}", jpeg_bytes, ex=600)
-        client.set(f"roadvision:job:live:{job_id}", __import__("json").dumps(payload), ex=600)
+        client.set(f"roadvision:job:live:{job_id}", json.dumps(payload).encode("utf-8"), ex=600)
     except Exception:
         logger.debug("preview publish skipped", exc_info=True)
+
+
+def _record_reject(
+    counts: dict[str, int],
+    reason: str,
+    *,
+    frame: int | None = None,
+    track_id: int | None = None,
+    n: int = 1,
+) -> None:
+    added = max(1, int(n))
+    previous = int(counts.get(reason) or 0)
+    total = previous + added
+    counts[reason] = total
+    crossed = previous == 0
+    first_mark = previous // REJECT_LOG_EVERY
+    last_mark = total // REJECT_LOG_EVERY
+    if crossed or last_mark > first_mark:
+        logger.info(
+            "plate rejected reason=%s count=%s frame=%s track=%s",
+            reason,
+            total,
+            frame,
+            track_id,
+        )
+
+
+def unique_vehicle_ids(
+    vehicle_meta: dict[int, dict[str, Any]],
+    best_by_track: dict[int, dict[str, Any]],
+    min_frames: int = MIN_VEHICLE_FRAMES,
+) -> set[int]:
+    """One id per physical passage: merged captures, then leftover tracks seen long enough.
+
+    Raw tracker ids and per-frame detections are not a unique-vehicle count.
+    """
+    counted: set[int] = set()
+    keepers: set[int] = set()
+    for capture_id, capture in best_by_track.items():
+        members = set(capture.get("source_ids") or [])
+        members.add(capture_id)
+        active = capture.get("active_tid")
+        if active is not None:
+            members.add(int(active))
+        keepers.add(capture_id)
+        counted.update(members)
+    for track_id, info in vehicle_meta.items():
+        if track_id in counted:
+            continue
+        if int(info.get("frame_count") or 0) < min_frames:
+            continue
+        keepers.add(track_id)
+        counted.add(track_id)
+    return keepers
+
+
+def _prune_open_crops(
+    open_crops: dict[int, dict[str, Any]],
+    active: set[int],
+    now_ts: float,
+) -> None:
+    stale_after = APPROACH_HOLD_SECONDS + PUBLISH_UNSEEN_SECONDS
+    for track_id, crop in list(open_crops.items()):
+        if track_id in active:
+            continue
+        last = float(crop.get("last_seen") or 0.0)
+        if now_ts - last >= stale_after:
+            del open_crops[track_id]
 
 
 def _plate_status(conf: float, high: float, medium: float, low: float) -> str:
@@ -859,6 +916,10 @@ def process_job(db: Session, job_id: UUID) -> None:
     index_flushed = False
     open_crops: dict[int, dict[str, Any]] = {}
     final_index = -1
+    last_ok_frame = -1
+    stage = "open"
+    last_heartbeat = time.perf_counter()
+    reject_counts: dict[str, int] = {}
 
     try:
         try:
@@ -889,11 +950,31 @@ def process_job(db: Session, job_id: UUID) -> None:
             _preview_size(meta.width, meta.height),
         )
 
+        def _heartbeat(current_stage: str, frame_index: int | None = None) -> None:
+            nonlocal last_heartbeat, stage
+            stage = current_stage
+            now_wall = time.perf_counter()
+            if now_wall - last_heartbeat < STAGE_HEARTBEAT_SECONDS:
+                return
+            last_heartbeat = now_wall
+            logger.info(
+                "processing last_ok_frame=%s current_frame=%s total=%s stage=%s tracks=%s unique_vehicles=%s rejects=%s",
+                last_ok_frame,
+                frame_index,
+                meta.frame_count,
+                current_stage,
+                len(vehicle_meta),
+                len(unique_vehicle_ids(vehicle_meta, best_by_track)),
+                dict(reject_counts),
+            )
+
         while True:
+            _heartbeat("read", final_index if final_index >= 0 else None)
             frame = source.read()
             if frame is None:
                 break
             final_index = frame.index
+            _heartbeat("control", frame.index)
             if _cancelled(str(job.id)):
                 job.status = JobStatus.CANCELLED.value
                 job.completed_at = datetime.now(UTC)
@@ -953,6 +1034,7 @@ def process_job(db: Session, job_id: UUID) -> None:
             detect_image = enhance_low_light_frame(working) if dark else working
             vehicle_conf = min(float(vehicle_detector.confidence), NIGHT_VEHICLE_CONFIDENCE) if dark else None
             plate_conf = min(float(plate_detector.confidence), 0.22) if dark else None
+            _heartbeat("track", frame.index)
             try:
                 vehicles_work = tracker.update(
                     detect_image,
@@ -965,21 +1047,37 @@ def process_job(db: Session, job_id: UUID) -> None:
                     _handle_oom(db, job, settings)
                     return
                 raise
-            attached_work = search_plates_in_vehicles(
-                detect_image,
-                vehicles_work,
-                plate_detector,
-                frame.index,
-                frame.timestamp,
-                confidence=plate_conf,
-                image_size=plate_roi_size,
-            )
-            loose_work: list[Any] = []
             vehicles = [scale_vehicle(vehicle, coord_scale) for vehicle in vehicles_work]
-            associated_native = [
-                (scale_vehicle(vehicle, coord_scale), scale_detection(plate, coord_scale))
-                for vehicle, plate in attached_work
-            ]
+            plate_rejects: dict[str, int] = {}
+            _heartbeat("plates", frame.index)
+            try:
+                associated_native = search_plates_in_vehicles(
+                    frame.image,
+                    vehicles,
+                    plate_detector,
+                    frame.index,
+                    frame.timestamp,
+                    confidence=plate_conf,
+                    image_size=plate_roi_size,
+                    rejects=plate_rejects,
+                )
+            except Exception:
+                logger.exception("plate search failed frame=%s; continuing without plates", frame.index)
+                associated_native = []
+                _record_reject(reject_counts, "plate_search_error", frame=frame.index)
+            for reason, count in plate_rejects.items():
+                _record_reject(reject_counts, reason, frame=frame.index, n=count)
+            inv_scale = 1.0 / coord_scale if coord_scale else 1.0
+            plates_by_tid = {vehicle.track_id: plate for vehicle, plate in associated_native}
+            attached_work = []
+            for vehicle in vehicles_work:
+                plate = plates_by_tid.get(vehicle.track_id)
+                if plate is None:
+                    continue
+                attached_work.append(
+                    (vehicle, plate if coord_scale == 1.0 else scale_detection(plate, inv_scale))
+                )
+            loose_work: list[Any] = []
 
             for v in vehicles:
                 info = vehicle_meta.setdefault(
@@ -1012,6 +1110,7 @@ def process_job(db: Session, job_id: UUID) -> None:
                 if previous_crop is not None:
                     previous_crop["last_seen"] = seen
                     previous_crop["closing"] = bool(info["closing"])
+                    previous_crop["frame_count"] = info["frame_count"]
                 nearer = previous_crop is None or area > float(previous_crop.get("area") or 0.0)
                 if nearer and area >= MIN_PLATE_SEARCH_AREA and box.width >= MIN_PLATE_SEARCH_WIDTH:
                     vx1, vy1, vx2, vy2 = box.clip(meta.width, meta.height).as_int()
@@ -1031,27 +1130,50 @@ def process_job(db: Session, job_id: UUID) -> None:
                             "vehicle_type": v.detection.class_name,
                             "conf": v.detection.confidence,
                             "closing": bool(info["closing"]),
+                            "frame_count": info["frame_count"],
                         }
 
             frame_crops: list[dict[str, Any]] = []
+            _heartbeat("quality", frame.index)
             for vehicle, plate in associated_native:
                     x1, y1, x2, y2 = plate.bounding_box.clip(meta.width, meta.height).as_int()
                     vx1, vy1, vx2, vy2 = vehicle.detection.bounding_box.clip(meta.width, meta.height).as_int()
-                    plate_img = crop_box(frame.image, x1, y1, x2, y2, pad=0.08)
+                    if x2 <= x1 or y2 <= y1:
+                        _record_reject(
+                            reject_counts, "invalid_geometry", frame=frame.index, track_id=vehicle.track_id
+                        )
+                        continue
+                    plate_pad = PLATE_CROP_PAD_NIGHT if dark else PLATE_CROP_PAD_DAY
+                    plate_img = crop_box(frame.image, x1, y1, x2, y2, pad=plate_pad)
                     pad_l, pad_t, pad_r, pad_b = vehicle_capture_pads(vehicle.detection.class_name)
                     vehicle_img, _, _ = crop_box_asymmetric(frame.image, vx1, vy1, vx2, vy2, pad_l, pad_t, pad_r, pad_b)
                     if plate_img.size == 0:
+                        _record_reject(reject_counts, "empty", frame=frame.index, track_id=vehicle.track_id)
                         continue
-                    metrics = evaluate_plate_crop(
-                        plate_img,
-                        float(x2 - x1),
-                        float(y2 - y1),
-                        plate.confidence,
-                        config=quality_config,
-                        dark=dark,
-                    )
+                    try:
+                        metrics = evaluate_plate_crop(
+                            plate_img,
+                            float(x2 - x1),
+                            float(y2 - y1),
+                            plate.confidence,
+                            config=quality_config,
+                            dark=dark,
+                        )
+                    except Exception:
+                        logger.exception("plate quality failed frame=%s track=%s", frame.index, vehicle.track_id)
+                        _record_reject(reject_counts, "quality_error", frame=frame.index, track_id=vehicle.track_id)
+                        continue
                     capture_id = vehicle.track_id
-                    if not metrics.accepted:
+                    reason = metrics.reject_reason
+                    if quality_reason_is_hard(reason) or not crop_has_number_plate(
+                        plate_img, float(x2 - x1), float(y2 - y1), plate.confidence
+                    ):
+                        _record_reject(
+                            reject_counts,
+                            reason or "no_plate",
+                            frame=frame.index,
+                            track_id=vehicle.track_id,
+                        )
                         candidate_store.record_detection(
                             capture_id,
                             width=metrics.plate_width,
@@ -1059,10 +1181,18 @@ def process_job(db: Session, job_id: UUID) -> None:
                             accepted=False,
                         )
                         continue
-                    plate_pad = PLATE_CROP_PAD_NIGHT if dark else PLATE_CROP_PAD_DAY
-                    saved_plate = crop_box(frame.image, x1, y1, x2, y2, pad=plate_pad)
-                    if saved_plate.size == 0:
-                        saved_plate = plate_img
+                    saved_plate, original_plate = choose_readable_plate(plate_img, dark=dark)
+                    enhanced = saved_plate is not original_plate
+                    if reason and not metrics.accepted:
+                        _record_reject(
+                            reject_counts,
+                            f"recovered_{reason}",
+                            frame=frame.index,
+                            track_id=vehicle.track_id,
+                        )
+                    if not metrics.accepted:
+                        metrics.accepted = True
+                        metrics.total_score = max(float(metrics.total_score or 0.0), 0.05)
                     vehicle_box = {"x1": vx1, "y1": vy1, "x2": vx2, "y2": vy2}
                     vehicle_area = float(max(0, vx2 - vx1) * max(0, vy2 - vy1))
                     previous = best_by_track.get(vehicle.track_id)
@@ -1101,7 +1231,9 @@ def process_job(db: Session, job_id: UUID) -> None:
                             "total_score": metrics.total_score,
                             "vehicle_area": vehicle_area,
                             "image_plate": saved_plate.copy(),
+                            "image_plate_original": original_plate.copy() if original_plate is not None else None,
                             "image_vehicle": vehicle_img.copy() if vehicle_img.size else None,
+                            "enhanced": enhanced,
                         },
                     )
                     observation = {
@@ -1142,6 +1274,8 @@ def process_job(db: Session, job_id: UUID) -> None:
                             "image_full": frame.image,
                             "image_vehicle": vehicle_img,
                             "image_plate": saved_plate,
+                            "image_plate_original": original_plate,
+                            "enhanced": enhanced,
                             "observation": observation,
                             "source_ids": {vehicle.track_id, capture_id},
                             "active_tid": vehicle.track_id,
@@ -1152,6 +1286,7 @@ def process_job(db: Session, job_id: UUID) -> None:
                     if passage.get("peak_area") is not None:
                         best_by_track[capture_id]["peak_vehicle_area"] = passage["peak_area"]
 
+            _heartbeat("output", frame.index)
             _collapse_captures(best_by_track, candidate_store)
             _apply_store_winners(best_by_track, candidate_store)
             _apply_closest_vehicles(best_by_track, open_crops)
@@ -1207,25 +1342,27 @@ def process_job(db: Session, job_id: UUID) -> None:
                         "total_frames": meta.frame_count or 0,
                         "timestamp_seconds": frame.timestamp,
                         "source_fps": source_fps,
-                        "vehicles_detected": len(vehicle_meta),
+                        "vehicles_detected": len(unique_vehicle_ids(vehicle_meta, best_by_track)),
                         "plates_captured": sum(1 for cap in best_by_track.values() if cap.get("published")),
                         "progress": min(99.0, 100.0 * (frame.index + 1) / meta.frame_count) if meta.frame_count else 0,
                     },
                 )
 
             processed += 1
+            last_ok_frame = frame.index
             elapsed = time.perf_counter() - start - paused_total
             last_fps = processed / elapsed if elapsed else 0.0
             remaining = None
             if source_fps and meta.frame_count:
                 remaining = max(0.0, (meta.frame_count - frame.index - 1) / source_fps)
+            unique_count = len(unique_vehicle_ids(vehicle_meta, best_by_track))
             job.current_frame = frame.index
             job.processed_frames = processed
             job.skipped_frames = skipped
             job.processing_fps = last_fps
             job.estimated_remaining_seconds = remaining
             job.progress = min(99.0, 100.0 * (frame.index + 1) / meta.frame_count) if meta.frame_count else 0
-            job.vehicles_detected = len(vehicle_meta)
+            job.vehicles_detected = unique_count
             job.plates_detected = sum(1 for cap in best_by_track.values() if cap.get("published"))
             _commit_progress_if_due()
             try:
@@ -1242,7 +1379,15 @@ def process_job(db: Session, job_id: UUID) -> None:
                 look_stride = max(look_stride, frame_skip + 1)
             skipped += source.grab(look_stride - 1)
 
+        logger.info(
+            "processing loop finished last_ok_frame=%s total=%s unique_vehicles=%s plate_rejects=%s",
+            last_ok_frame,
+            meta.frame_count,
+            len(unique_vehicle_ids(vehicle_meta, best_by_track)),
+            dict(reject_counts),
+        )
         job.status = JobStatus.FINALIZING.value
+        stage = "finalizing"
         if overlay_thread is not None and not overlay_holder.get("done"):
             overlay_thread.join(timeout=8.0)
         _maybe_apply_overlay_clock()
@@ -1266,6 +1411,8 @@ def process_job(db: Session, job_id: UUID) -> None:
             renderer = None
         _install_playable_annotated(annotated_path)
         plate_stats = diag_summary.get("plates") or {}
+        unique_ids = unique_vehicle_ids(vehicle_meta, best_by_track)
+        unique_count = len(unique_ids)
         _persist(
             db,
             job,
@@ -1283,8 +1430,9 @@ def process_job(db: Session, job_id: UUID) -> None:
                 "source_fps": source_fps,
                 "average_frame_latency": sum(inference_times) / len(inference_times) if inference_times else None,
                 "average_inference_latency": sum(inference_times) / len(inference_times) if inference_times else None,
-                "vehicle_detection_count": len(vehicle_meta),
-                "unique_vehicle_count": len(vehicle_meta),
+                "vehicle_detection_count": unique_count,
+                "unique_vehicle_count": unique_count,
+                "tracker_id_count": len(vehicle_meta),
                 "plate_capture_count": sum(1 for cap in best_by_track.values() if not cap.get("vehicle_only")),
                 "failed_frames": failed_frames,
                 "peak_gpu_memory": peak_gpu,
@@ -1293,16 +1441,19 @@ def process_job(db: Session, job_id: UUID) -> None:
                 "plate_roi_image_size": plate_roi_size,
                 "vehicles_with_plate_detections": plate_stats.get("vehicles_with_plate_detections"),
                 "vehicles_with_usable_quality_candidate": plate_stats.get("vehicles_with_usable_quality_candidate"),
+                "plate_reject_counts": dict(reject_counts),
             },
+            persist_ids=unique_ids,
         )
         job.status = JobStatus.COMPLETED.value
         job.progress = 100
         job.completed_at = datetime.now(UTC)
         db.commit()
     except PipelineError as exc:
+        logger.error("processing failed last_ok_frame=%s stage=%s code=%s", last_ok_frame, stage, exc.error_code)
         _fail(db, job, exc.error_code, exc.message)
     except MemoryError:
-        logger.exception("processing failed: out of memory")
+        logger.exception("processing failed: out of memory last_ok_frame=%s stage=%s", last_ok_frame, stage)
         _fail(
             db,
             job,
@@ -1313,10 +1464,10 @@ def process_job(db: Session, job_id: UUID) -> None:
         if "out of memory" in str(exc).lower():
             _handle_oom(db, job, settings)
         else:
-            logger.exception("processing failed")
+            logger.exception("processing failed last_ok_frame=%s stage=%s", last_ok_frame, stage)
             _fail(db, job, "PROCESSING_FAILED", _public_error(exc))
     except Exception as exc:
-        logger.exception("processing failed")
+        logger.exception("processing failed last_ok_frame=%s stage=%s", last_ok_frame, stage)
         _fail(db, job, "PROCESSING_FAILED", _public_error(exc))
     finally:
         source.close()
@@ -1360,18 +1511,22 @@ def _persist(
     annotated_path: Path,
     settings: Settings,
     metrics: dict[str, Any],
+    persist_ids: set[int] | None = None,
 ) -> None:
+    keepers = set(persist_ids if persist_ids is not None else unique_vehicle_ids(vehicle_meta, best_by_track))
     tracks: dict[int, VehicleTrack] = {}
-    for track_id, info in vehicle_meta.items():
+    for track_id in keepers:
+        info = dict(vehicle_meta.get(track_id) or {})
+        capture = best_by_track.get(track_id) or {}
         track = VehicleTrack(
             processing_job_id=job.id,
             track_id=track_id,
-            vehicle_type=info.get("type", "unknown"),
-            first_frame=info.get("first_frame", 0),
-            last_frame=info.get("last_frame", 0),
-            first_seen_seconds=info.get("first_seen", 0.0),
-            last_seen_seconds=info.get("last_seen", 0.0),
-            detection_confidence=info.get("conf", 0.0),
+            vehicle_type=info.get("type") or capture.get("vehicle_type") or "unknown",
+            first_frame=info.get("first_frame", capture.get("best_frame") or 0),
+            last_frame=info.get("last_frame", capture.get("best_frame") or 0),
+            first_seen_seconds=info.get("first_seen", capture.get("first_seen") or 0.0),
+            last_seen_seconds=info.get("last_seen", capture.get("last_seen") or 0.0),
+            detection_confidence=info.get("conf", capture.get("vehicle_confidence") or 0.0),
         )
         db.add(track)
         db.flush()
@@ -1394,7 +1549,9 @@ def _persist(
             filename = f"{kind}_{uuid4().hex}.jpg"
             path = folder / filename
             quality = JPEG_PLATE_QUALITY if kind == "plate_crop" else JPEG_EVIDENCE_QUALITY
-            save_jpeg(path, image, quality)
+            if not save_jpeg(path, image, quality):
+                logger.warning("evidence jpeg failed kind=%s track=%s", kind, track_id)
+                continue
             if kind == "plate_crop":
                 save_png(path.with_suffix(".png"), image)
             rel = f"evidence/{job.id}/track_{track_id}/{filename}"
@@ -1461,6 +1618,6 @@ def _persist(
             )
         )
     job.metrics = metrics
-    job.vehicles_detected = len(vehicle_meta)
+    job.vehicles_detected = len(tracks)
     job.plates_detected = sum(1 for cap in best_by_track.values() if not cap.get("vehicle_only"))
     db.flush()

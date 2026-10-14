@@ -53,6 +53,22 @@ class PlateQualityConfig:
 
 DEFAULT_QUALITY = PlateQualityConfig()
 
+# Detector already called this a plate. Blur, glare, and underexposure are
+# recovered with contrast/sharpness, not discarded. Empty crops, captions,
+# tiny boxes, and headlight-shaped geometry stay rejected.
+HARD_QUALITY_REASONS = frozenset(
+    {"empty", "caption", "size", "geometry", "detector_confidence", "headlight"}
+)
+RECOVERABLE_QUALITY_REASONS = frozenset(
+    {"sharpness", "contrast", "saturation", "underexposed"}
+)
+
+
+def quality_reason_is_hard(reason: str | None) -> bool:
+    if not reason:
+        return False
+    return reason in HARD_QUALITY_REASONS
+
 
 @dataclass
 class PlateQualityMetrics:
@@ -274,11 +290,14 @@ def gate_plate(
     contrast: float,
     sat_ratio: float,
     config: PlateQualityConfig = DEFAULT_QUALITY,
+    dark: bool = False,
 ) -> str | None:
     """Return a reject reason, or None when the crop may enter ranking.
 
     Extreme blur, clipping, and wrong aspect still fail. A moderate Laplacian
-    on a high-resolution frame does not.
+    on a high-resolution frame does not. Night frames allow a slightly higher
+    clip ratio so a partly glared plate can enter the per-track buffer; ranking
+    still prefers the least-washed-out crop.
     """
     from app.preprocessing.plates import is_burned_in_caption
 
@@ -297,7 +316,10 @@ def gate_plate(
         return "sharpness"
     if float(contrast) < config.min_contrast:
         return "contrast"
-    if float(sat_ratio) > config.max_saturation_ratio:
+    sat_limit = float(config.max_saturation_ratio)
+    if dark:
+        sat_limit = max(sat_limit, 0.62)
+    if float(sat_ratio) > sat_limit:
         return "saturation"
     mean = brightness_value(image)
     if mean > 230 and contrast < config.min_contrast * 2 and aspect < 1.4:
@@ -360,6 +382,7 @@ def evaluate_plate_crop(
         contrast=contrast,
         sat_ratio=sat,
         config=cfg,
+        dark=dark,
     )
     if dark and reason == "sharpness" and sharp >= max(6.0, cfg.min_sharpness * 0.5):
         reason = None

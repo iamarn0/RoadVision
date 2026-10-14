@@ -121,6 +121,31 @@ def test_plausible_plate_rejects_tiny_night_crop() -> None:
     assert ok is False
 
 
+def test_publish_writes_enhanced_jpeg_and_original_png(tmp_path) -> None:
+    import numpy as np
+    from app.pipeline.runner import _publish_track_capture
+
+    original = np.full((20, 60, 3), 30, dtype=np.uint8)
+    enhanced = np.full((20, 60, 3), 180, dtype=np.uint8)
+    capture = {
+        "image_plate": enhanced,
+        "image_plate_original": original,
+        "image_vehicle": enhanced,
+        "first_seen": 1.0,
+        "last_seen": 2.0,
+        "vehicle_type": "car",
+        "plate_confidence": 0.7,
+        "vehicle_confidence": 0.9,
+    }
+    assert _publish_track_capture(tmp_path, 8, capture, None) is True
+    import cv2
+
+    jpg = cv2.imread(str(tmp_path / "track_8.jpg"))
+    png = cv2.imread(str(tmp_path / "track_8.png"))
+    assert jpg is not None and png is not None
+    assert float(jpg.mean()) > float(png.mean())
+
+
 def test_night_plate_save_keeps_native_size() -> None:
     import numpy as np
     from app.preprocessing.plates import enhance_night_plate_crop
@@ -217,6 +242,37 @@ def test_hard_false_positive_rejects_empty_structure() -> None:
 
     img = np.full((28, 80, 3), 80, dtype=np.uint8)
     assert is_hard_false_positive(img, 80, 28, 0.9) is True
+
+
+def test_plate_search_on_native_frame_keeps_frame_coordinates() -> None:
+    import numpy as np
+    from app.pipeline.geometry import BoundingBox, Detection
+    from app.pipeline.plate_search import crop_vehicle_roi, make_working_image, search_plates_in_vehicles
+    from app.tracking.tracker import TrackedVehicle
+
+    native = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    working, scale = make_working_image(native)
+    assert scale == 2.0
+    vehicle = TrackedVehicle(
+        track_id=1,
+        detection=Detection(BoundingBox(400, 200, 800, 700), "car", 0.9, 1, 0.0),
+    )
+    plate = BoundingBox(520, 620, 700, 680)
+
+    class Detector:
+        def detect_many(self, images, frame_number, timestamp, confidence=None, image_size=None):
+            assert images[0].shape[1] >= 400
+            _crop, ox, oy = crop_vehicle_roi(native, vehicle.detection.bounding_box, "car")
+            local = BoundingBox(plate.x1 - ox, plate.y1 - oy, plate.x2 - ox, plate.y2 - oy)
+            return [[Detection(local, "license_plate", 0.93, frame_number, timestamp)]]
+
+    assigned = search_plates_in_vehicles(native, [vehicle], Detector(), 1, 0.0)
+    assert len(assigned) == 1
+    mapped = assigned[0][1].bounding_box
+    assert abs(mapped.x1 - plate.x1) < 1
+    assert abs(mapped.y1 - plate.y1) < 1
+    assert abs(mapped.x2 - plate.x2) < 1
+    assert abs(mapped.y2 - plate.y2) < 1
 
 
 def test_remap_plate_box_adds_roi_origin() -> None:
@@ -365,6 +421,124 @@ def test_vehicle_only_duplicate_collapses_into_plate_row() -> None:
     assert list(best) == [4]
     assert 9 in best[4]["source_ids"]
     assert best[4].get("vehicle_only") is not True
+
+
+def test_unique_vehicle_count_uses_merged_passages_not_raw_ids() -> None:
+    from app.pipeline.runner import unique_vehicle_ids
+
+    meta = {
+        1: {"frame_count": 20},
+        2: {"frame_count": 1},
+        40: {"frame_count": 9},
+        7: {"frame_count": 12},
+    }
+    best = {
+        1: {"source_ids": {1, 40}, "active_tid": 40},
+        7: {"source_ids": {7}},
+    }
+    ids = unique_vehicle_ids(meta, best)
+    assert ids == {1, 7}
+    assert 2 not in ids
+    assert 40 not in ids
+
+
+def test_unique_vehicle_count_keeps_long_tracks_without_a_capture() -> None:
+    from app.pipeline.runner import unique_vehicle_ids
+
+    meta = {8: {"frame_count": 15}, 9: {"frame_count": 2}}
+    assert unique_vehicle_ids(meta, {}) == {8}
+
+
+def test_open_crops_are_pruned_after_a_vehicle_leaves() -> None:
+    from app.pipeline.runner import _prune_open_crops
+
+    crops = {
+        1: {"last_seen": 1.0},
+        2: {"last_seen": 10.0},
+    }
+    _prune_open_crops(crops, active={2}, now_ts=10.0)
+    assert 1 not in crops
+    assert 2 in crops
+
+
+def test_rear_bumper_plate_is_attached() -> None:
+    import numpy as np
+    from app.pipeline.geometry import BoundingBox, Detection
+    from app.pipeline.plate_search import crop_vehicle_roi, search_plates_in_vehicles
+    from app.tracking.tracker import TrackedVehicle
+
+    frame = np.zeros((240, 480, 3), dtype=np.uint8)
+    vehicle = TrackedVehicle(
+        track_id=1,
+        detection=Detection(BoundingBox(40, 40, 180, 160), "car", 0.9, 1, 0.0),
+    )
+    plate = BoundingBox(70, 165, 140, 188)
+
+    class Detector:
+        def detect_many(self, images, frame_number, timestamp, confidence=None, image_size=None):
+            _crop, ox, oy = crop_vehicle_roi(frame, vehicle.detection.bounding_box, "car")
+            local = BoundingBox(plate.x1 - ox, plate.y1 - oy, plate.x2 - ox, plate.y2 - oy)
+            return [[Detection(local, "license_plate", 0.92, frame_number, timestamp)]]
+
+    assigned = search_plates_in_vehicles(frame, [vehicle], Detector(), 1, 0.0)
+    assert [item[0].track_id for item in assigned] == [1]
+
+
+def test_plate_search_records_rejection_reasons() -> None:
+    import numpy as np
+    from app.pipeline.geometry import BoundingBox, Detection
+    from app.pipeline.plate_search import search_plates_in_vehicles
+    from app.tracking.tracker import TrackedVehicle
+
+    tiny = TrackedVehicle(
+        track_id=3,
+        detection=Detection(BoundingBox(0, 0, 20, 20), "car", 0.9, 1, 0.0),
+    )
+    rejects: dict[str, int] = {}
+    assigned = search_plates_in_vehicles(
+        np.zeros((80, 80, 3), dtype=np.uint8),
+        [tiny],
+        None,
+        1,
+        0.0,
+        rejects=rejects,
+    )
+    assert assigned == []
+    assert rejects.get("vehicle_roi_too_small", 0) >= 1
+
+
+def test_record_reject_counts_without_logging_every_event() -> None:
+    from app.pipeline.runner import _record_reject
+
+    counts: dict[str, int] = {}
+    _record_reject(counts, "saturation", frame=10, track_id=4)
+    _record_reject(counts, "saturation", frame=11, track_id=4, n=49)
+    assert counts["saturation"] == 50
+    _record_reject(counts, "overlap", frame=12)
+    assert counts["overlap"] == 1
+
+
+def test_night_plate_pad_is_tighter_than_day() -> None:
+    from app.preprocessing.plates import PLATE_CROP_PAD_DAY, PLATE_CROP_PAD_NIGHT
+
+    assert PLATE_CROP_PAD_NIGHT < PLATE_CROP_PAD_DAY
+    assert PLATE_CROP_PAD_NIGHT <= 0.08
+
+
+def test_night_crop_pad_keeps_adjacent_headlight_out() -> None:
+    import numpy as np
+    from app.preprocessing.plates import PLATE_CROP_PAD_NIGHT, crop_box
+
+    frame = np.zeros((200, 400, 3), dtype=np.uint8)
+    frame[100:140, 80:200] = 90
+    for x in range(90, 190, 12):
+        frame[108:132, x : x + 3] = 20
+    frame[90:150, 10:70] = 255
+    crop = crop_box(frame, 80, 100, 200, 140, pad=PLATE_CROP_PAD_NIGHT)
+    assert crop.shape[0] == frame[100:140, 80:200].shape[0] or crop.shape[0] <= 56
+    assert float(crop[:, :4].mean()) < 180
+    wide = crop_box(frame, 80, 100, 200, 140, pad=0.28)
+    assert float(wide[:, :8].mean()) > float(crop[:, :8].mean())
 
 
 def test_tiny_vehicle_boxes_are_not_searched_for_plates() -> None:
@@ -668,14 +842,11 @@ def test_end_of_video_publishes_vehicle_still_in_frame(tmp_path) -> None:
         5: {"image": vehicle, "frame": 435},
     }
     _queue_vehicles_still_in_frame(best, meta, crops, final_index=873, source_fps=25.0)
-    assert 9 in best
+    assert 9 not in best
     assert 5 not in best
-    assert best[9]["vehicle_only"] is True
-    assert _publish_all_pending(still, best, None) == 1
-    assert (still / "vehicle_9.jpg").is_file()
+    assert _publish_all_pending(still, best, None) == 0
+    assert not (still / "vehicle_9.jpg").exists()
     assert not (still / "track_9.jpg").exists()
-    sidecar = (still / "track_9.json").read_text(encoding="utf-8")
-    assert '"kind": "vehicle"' in sidecar
 
 
 def test_publish_track_capture_writes_once(tmp_path) -> None:
@@ -845,7 +1016,7 @@ def test_consider_keeps_closer_plate_for_approach_and_departure() -> None:
     assert capture["plate_width"] == 150
 
 
-def test_departing_truck_without_plate_is_still_saved(tmp_path) -> None:
+def test_departing_truck_without_plate_is_not_saved(tmp_path) -> None:
     import numpy as np
     from app.pipeline.runner import _promote_unplated_departures, _publish_due_captures
 
@@ -868,10 +1039,30 @@ def test_departing_truck_without_plate_is_still_saved(tmp_path) -> None:
     _promote_unplated_departures(best, crops, active=set(), now_ts=2.2)
     assert 4 not in best
     _promote_unplated_departures(best, crops, active=set(), now_ts=2.6)
-    assert best[4]["vehicle_only"] is True
-    assert best[4]["vehicle_type"] == "truck"
-    assert _publish_due_captures(tmp_path, [], best, None, 2.6, crops) == 1
-    assert (tmp_path / "vehicle_4.jpg").is_file()
+    assert 4 not in best
+    assert _publish_due_captures(tmp_path, [], best, None, 2.6, crops) == 0
+    assert not (tmp_path / "vehicle_4.jpg").exists()
+    assert not (tmp_path / "track_4.jpg").exists()
+
+
+def test_publish_skips_capture_without_number_plate(tmp_path) -> None:
+    import numpy as np
+    from app.pipeline.runner import _publish_track_capture
+
+    vehicle = np.zeros((40, 60, 3), dtype=np.uint8)
+    capture = {
+        "image_plate": None,
+        "image_vehicle": vehicle,
+        "image_full": vehicle,
+        "vehicle_only": True,
+        "first_seen": 1.0,
+        "last_seen": 2.0,
+        "vehicle_type": "truck",
+    }
+    assert _publish_track_capture(tmp_path, 4, capture, None) is False
+    assert not (tmp_path / "vehicle_4.jpg").exists()
+    assert not (tmp_path / "track_4.jpg").exists()
+    assert capture.get("published") is not True
 
 
 def test_overlay_index_allows_vehicle_without_plate() -> None:

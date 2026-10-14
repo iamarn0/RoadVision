@@ -288,18 +288,8 @@ def get_live_captures(job_id: UUID, user: RequireReader, db: Session = Depends(g
             except (IndexError, ValueError):
                 continue
             meta = _merge_meta(item_by_key(index, f"plate-{track_id}"), _load_sidecar(captures_dir / f"track_{track_id}.json"))
-            items.append(_plate_item(job_id, path, track_id, meta, job_metrics))
-        seen_tracks = {int(item["track_id"]) for item in items if item.get("kind") != "snapshot"}
-        for path in captures_dir.glob("vehicle_*.jpg"):
-            try:
-                track_id = int(path.stem.split("_", 1)[1])
-            except (IndexError, ValueError):
+            if bool((meta or {}).get("vehicle_only") or (meta or {}).get("kind") == "vehicle"):
                 continue
-            if track_id in seen_tracks or (captures_dir / f"track_{track_id}.jpg").is_file():
-                continue
-            meta = _merge_meta(item_by_key(index, f"plate-{track_id}"), _load_sidecar(captures_dir / f"track_{track_id}.json"))
-            meta["vehicle_only"] = True
-            meta["kind"] = "vehicle"
             items.append(_plate_item(job_id, path, track_id, meta, job_metrics))
     items.sort(
         key=lambda item: (

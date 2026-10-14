@@ -69,6 +69,12 @@ class UploadedFileSource(VideoSource):
         self._cap = cv2.VideoCapture(str(self.path))
         if not self._cap.isOpened():
             raise ValueError(f"Unable to open video: {self.path}")
+        # File sources usually ignore these; FFmpeg RTSP-style stalls then return.
+        try:
+            self._cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 15000)
+            self._cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 15000)
+        except Exception:
+            pass
         width = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
         fps = float(self._cap.get(cv2.CAP_PROP_FPS) or 0) or 25.0

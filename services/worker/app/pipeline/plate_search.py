@@ -127,12 +127,16 @@ def crop_vehicle_roi(
 
 
 def ownership_region(box: BoundingBox) -> BoundingBox:
-    """Vehicle box plus a short bumper margin. Not the full search pad."""
+    """Vehicle box plus a bumper margin for rear plates.
+
+    Side pad stays tight so a neighbour's plate is not claimed. Bottom pad must
+    reach a plate sitting on the bumper below the body box; 0.18 dropped those.
+    """
     return BoundingBox(
         box.x1 - box.width * 0.06,
         box.y1 - box.height * 0.04,
         box.x2 + box.width * 0.06,
-        box.y2 + box.height * 0.18,
+        box.y2 + box.height * 0.32,
     )
 
 
@@ -159,6 +163,12 @@ def prepare_roi_for_detect(roi: np.ndarray) -> np.ndarray:
     return roi
 
 
+def _note_reject(rejects: dict[str, int] | None, reason: str) -> None:
+    if rejects is None:
+        return
+    rejects[reason] = int(rejects.get(reason) or 0) + 1
+
+
 def search_plates_in_vehicles(
     frame_image: np.ndarray,
     vehicles: list[TrackedVehicle],
@@ -168,6 +178,7 @@ def search_plates_in_vehicles(
     skip_ids: set[int] | None = None,
     confidence: float | None = None,
     image_size: int | None = None,
+    rejects: dict[str, int] | None = None,
 ) -> list[tuple[TrackedVehicle, Detection]]:
     """Run plate YOLO on padded vehicle ROIs and remap boxes to frame coordinates.
 
@@ -183,9 +194,11 @@ def search_plates_in_vehicles(
             continue
         box = vehicle.detection.bounding_box
         if box.area < MIN_PLATE_SEARCH_AREA or box.width < MIN_PLATE_SEARCH_WIDTH:
+            _note_reject(rejects, "vehicle_roi_too_small")
             continue
         roi, ox, oy = crop_vehicle_roi(frame_image, box, vehicle.detection.class_name)
         if roi.size == 0 or roi.shape[0] < 12 or roi.shape[1] < 12:
+            _note_reject(rejects, "vehicle_roi_invalid")
             continue
         rois.append(prepare_roi_for_detect(roi))
         origins.append((ox, oy, vehicle))
@@ -202,6 +215,9 @@ def search_plates_in_vehicles(
     frame_h, frame_w = frame_image.shape[:2]
     per_vehicle: dict[int, tuple[TrackedVehicle, Detection, float]] = {}
     for (ox, oy, vehicle), detections in zip(origins, batches):
+        if not detections:
+            _note_reject(rejects, "no_plate_candidate")
+            continue
         body = vehicle.detection.bounding_box
         for det in detections:
             remapped = Detection(
@@ -212,10 +228,15 @@ def search_plates_in_vehicles(
                 timestamp=timestamp,
                 track_id=vehicle.track_id,
             )
+            if remapped.bounding_box.area <= 0:
+                _note_reject(rejects, "invalid_geometry")
+                continue
             if _crop_is_caption(frame_image, remapped, frame_w, frame_h):
+                _note_reject(rejects, "caption")
                 continue
             inside = plate_inside_fraction(remapped.bounding_box, body)
             if inside < MIN_PLATE_INSIDE:
+                _note_reject(rejects, "overlap")
                 continue
             current = per_vehicle.get(vehicle.track_id)
             if current is None or inside > current[2] or (
@@ -227,6 +248,7 @@ def search_plates_in_vehicles(
     kept_boxes: list[BoundingBox] = []
     for vehicle, plate, _inside in ranked:
         if any(plate.bounding_box.iou(prev) >= 0.35 for prev in kept_boxes):
+            _note_reject(rejects, "overlap")
             continue
         kept_boxes.append(plate.bounding_box)
         assigned.append((vehicle, plate))

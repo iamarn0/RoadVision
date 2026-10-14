@@ -206,6 +206,112 @@ def test_evaluate_accepts_moderate_sharpness_on_high_res_frame() -> None:
     assert rejected.reject_reason == "sharpness"
 
 
+def test_quality_reason_is_hard_keeps_blur_and_glare_recoverable() -> None:
+    from app.preprocessing.quality import quality_reason_is_hard
+
+    assert quality_reason_is_hard("empty") is True
+    assert quality_reason_is_hard("caption") is True
+    assert quality_reason_is_hard("size") is True
+    assert quality_reason_is_hard("geometry") is True
+    assert quality_reason_is_hard("sharpness") is False
+    assert quality_reason_is_hard("contrast") is False
+    assert quality_reason_is_hard("saturation") is False
+    assert quality_reason_is_hard("underexposed") is False
+    assert quality_reason_is_hard("headlight") is True
+    assert quality_reason_is_hard(None) is False
+
+
+def test_enhance_plate_raises_contrast_and_sharpness_on_dark_crop() -> None:
+    from app.preprocessing.plates import choose_readable_plate, enhance_plate_for_readability, readability_score
+    from app.preprocessing.quality import contrast_value
+
+    dark = np.full((36, 140, 3), 28, dtype=np.uint8)
+    for x in range(10, 130, 12):
+        dark[8:28, x : x + 3] = 48
+    enhanced = enhance_plate_for_readability(dark, dark=True)
+    assert enhanced.shape[:2] == dark.shape[:2]
+    assert contrast_value(enhanced) > contrast_value(dark)
+    display, original = choose_readable_plate(dark, dark=True)
+    assert readability_score(display) >= readability_score(dark)
+    assert np.array_equal(original, dark)
+
+
+def test_enhance_plate_compresses_bloom_without_changing_size() -> None:
+    from app.preprocessing.plates import choose_readable_plate, enhance_plate_for_readability
+    from app.preprocessing.quality import saturation_ratio
+
+    bloom = np.full((40, 160, 3), 250, dtype=np.uint8)
+    for x in range(12, 148, 16):
+        bloom[10:30, x : x + 4] = 210
+    out = enhance_plate_for_readability(bloom, dark=True)
+    assert out.shape[:2] == bloom.shape[:2]
+    assert saturation_ratio(out) <= saturation_ratio(bloom) + 0.01
+    display, original = choose_readable_plate(bloom, dark=True)
+    assert np.array_equal(display, original)
+
+
+def test_day_enhance_keeps_native_pixels() -> None:
+    from app.preprocessing.plates import choose_readable_plate, enhance_plate_for_readability
+
+    day = _bar_plate(140, 40, fill=210, bar=30)
+    assert np.array_equal(enhance_plate_for_readability(day, dark=False), day)
+    display, original = choose_readable_plate(day, dark=False)
+    assert np.array_equal(display, original)
+    assert np.array_equal(original, day)
+
+
+def test_midtone_ir_plate_gets_night_contrast_lift() -> None:
+    from app.preprocessing.plates import enhance_plate_for_readability
+    from app.preprocessing.quality import contrast_value
+
+    ir = np.full((40, 160, 3), 110, dtype=np.uint8)
+    for x in range(12, 148, 14):
+        ir[8:32, x : x + 4] = 40
+    out = enhance_plate_for_readability(ir, dark=True)
+    assert out.shape[:2] == ir.shape[:2]
+    assert contrast_value(out) > contrast_value(ir)
+
+
+def test_enhance_skips_padded_headlight_bloom() -> None:
+    from app.preprocessing.plates import choose_readable_plate, enhance_plate_for_readability
+
+    padded = np.zeros((48, 180, 3), dtype=np.uint8)
+    padded[8:40, 16:164] = 235
+    for x in range(24, 156, 18):
+        padded[14:34, x : x + 5] = 40
+    out = enhance_plate_for_readability(padded, dark=True)
+    assert out.shape[:2] == padded.shape[:2]
+    display, original = choose_readable_plate(padded, dark=True)
+    assert np.array_equal(display, original)
+    assert np.array_equal(original, padded)
+
+
+def test_crop_has_number_plate_rejects_blank_and_headlight() -> None:
+    from app.preprocessing.plates import crop_has_number_plate
+
+    plate = _bar_plate(140, 40)
+    assert crop_has_number_plate(plate, 140, 40, 0.8) is True
+    blank = np.full((40, 140, 3), 80, dtype=np.uint8)
+    assert crop_has_number_plate(blank, 140, 40, 0.8) is False
+    lamp = np.full((40, 50, 3), 250, dtype=np.uint8)
+    assert crop_has_number_plate(lamp, 50, 40, 0.9) is False
+
+
+def test_night_gate_allows_partial_glare_but_still_rejects_bloom() -> None:
+    plate = np.full((40, 140, 3), 70, dtype=np.uint8)
+    for x in range(8, 70, 10):
+        plate[8:32, x : x + 3] = 18
+    plate[:, 70:] = 255
+    day = evaluate_plate_crop(plate, 140, 40, 0.8, dark=False)
+    night = evaluate_plate_crop(plate, 140, 40, 0.8, dark=True)
+    assert day.accepted is False
+    assert day.reject_reason == "saturation"
+    assert night.accepted is True
+    burned = np.full((40, 140, 3), 255, dtype=np.uint8)
+    night_burned = evaluate_plate_crop(burned, 140, 40, 0.8, dark=True)
+    assert night_burned.accepted is False
+
+
 def test_evaluate_rejects_empty_overexposed_and_tiny() -> None:
     empty = np.full((30, 90, 3), 80, dtype=np.uint8)
     assert evaluate_plate_crop(empty, 90, 30, 0.9).accepted is False
@@ -294,3 +400,34 @@ def test_resized_box_maps_back_and_crop_uses_original_pixels() -> None:
     assert crop.shape[0] >= 48
     assert not np.array_equal(crop, np.zeros_like(crop))
     assert crop.mean() > 10
+    assert (crop[:, :, 0] == 10).any()
+
+
+def test_night_save_keeps_native_size_and_rejects_glare_lift() -> None:
+    import cv2
+
+    from app.preprocessing.plates import PLATE_CROP_PAD_NIGHT, choose_readable_plate, crop_box
+
+    frame = np.zeros((240, 480, 3), dtype=np.uint8)
+    frame[80:140, 40:200] = 70
+    frame[100:150, 220:400] = 55
+    for x in range(50, 190, 16):
+        frame[92:128, x : x + 4] = 18
+    for x in range(230, 390, 18):
+        frame[112:138, x : x + 3] = 30
+    frame[70:160, 0:18] = 255
+    frame[90:150, 430:470] = 250
+    left = crop_box(frame, 40, 80, 200, 140, pad=PLATE_CROP_PAD_NIGHT)
+    right = crop_box(frame, 220, 100, 400, 150, pad=PLATE_CROP_PAD_NIGHT)
+    assert left.shape[0] < 90 and right.shape[0] < 80
+    assert float(left[:, :2].mean()) < 180
+    assert float(right[:, -2:].mean()) < 200
+    glare = left.copy()
+    glare[:, glare.shape[1] // 2 :] = 245
+    display, original = choose_readable_plate(glare, dark=True)
+    assert display.shape == glare.shape
+    assert np.array_equal(display, original)
+    blurry = cv2.GaussianBlur(left, (5, 5), 0)
+    blur_display, blur_original = choose_readable_plate(blurry, dark=True)
+    assert blur_display.shape == blurry.shape
+    assert np.array_equal(blur_original, blurry)
