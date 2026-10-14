@@ -59,8 +59,7 @@ function CapturesTable({
   compact?: boolean;
   onOpen: (item: LiveCaptureItem) => void;
 }) {
-  const listed = items.filter((item) => !isVehicleOnly(item));
-  const rows = [...listed].sort((a, b) => {
+  const rows = [...items].sort((a, b) => {
     const delta = captureTimeValue(b) - captureTimeValue(a);
     return sort === "oldest" ? -delta : delta;
   });
@@ -68,7 +67,7 @@ function CapturesTable({
     return (
       <EmptyState
         title="No captures yet"
-        description="Plate rows appear here as soon as a capture has enough information. Capture saves the current frame as a snapshot row."
+        description="Each vehicle is listed once, with a plate when one was read. Capture saves the current frame as a snapshot row."
       />
     );
   }

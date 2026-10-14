@@ -54,15 +54,21 @@ def plate_index_item(
     vehicle_confidence: float | None = None,
     plate_width: float | None = None,
     good_evidence: bool | None = None,
+    vehicle_only: bool = False,
 ) -> dict[str, Any]:
     width = None if plate_width is None else float(plate_width)
     readable = good_evidence
     if readable is None and width is not None:
         readable = width >= 75.0
+    if vehicle_only:
+        width = None
+        readable = None
+        plate_confidence = None
     return {
         "key": f"plate-{track_id}",
         "track_id": track_id,
-        "kind": "plate",
+        "kind": "vehicle" if vehicle_only else "plate",
+        "vehicle_only": bool(vehicle_only),
         "vehicle_type": vehicle_type,
         "first_seen_seconds": float(first_seen),
         "last_seen_seconds": float(last_seen),

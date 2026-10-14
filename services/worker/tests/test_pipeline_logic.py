@@ -842,11 +842,13 @@ def test_end_of_video_publishes_vehicle_still_in_frame(tmp_path) -> None:
         5: {"image": vehicle, "frame": 435},
     }
     _queue_vehicles_still_in_frame(best, meta, crops, final_index=873, source_fps=25.0)
-    assert 9 not in best
+    assert 9 in best
+    assert best[9]["vehicle_only"] is True
     assert 5 not in best
-    assert _publish_all_pending(still, best, None) == 0
-    assert not (still / "vehicle_9.jpg").exists()
+    assert _publish_all_pending(still, best, None) == 1
+    assert (still / "vehicle_9.jpg").is_file()
     assert not (still / "track_9.jpg").exists()
+    assert _publish_all_pending(still, best, None) == 0
 
 
 def test_publish_track_capture_writes_once(tmp_path) -> None:
@@ -1016,7 +1018,7 @@ def test_consider_keeps_closer_plate_for_approach_and_departure() -> None:
     assert capture["plate_width"] == 150
 
 
-def test_departing_truck_without_plate_is_not_saved(tmp_path) -> None:
+def test_departing_truck_without_plate_is_saved_once(tmp_path) -> None:
     import numpy as np
     from app.pipeline.runner import _promote_unplated_departures, _publish_due_captures
 
@@ -1033,19 +1035,35 @@ def test_departing_truck_without_plate_is_not_saved(tmp_path) -> None:
             "vehicle_type": "truck",
             "conf": 0.22,
             "closing": False,
-        }
+        },
+        11: {
+            "image": truck,
+            "image_full": truck,
+            "frame": 12,
+            "area": 8200.0,
+            "vehicle_box": {"x1": 4, "y1": 3, "x2": 32, "y2": 42},
+            "first_seen": 2.1,
+            "last_seen": 2.3,
+            "vehicle_type": "truck",
+            "conf": 0.3,
+            "closing": False,
+        },
     }
     best: dict = {}
     _promote_unplated_departures(best, crops, active=set(), now_ts=2.2)
     assert 4 not in best
-    _promote_unplated_departures(best, crops, active=set(), now_ts=2.6)
-    assert 4 not in best
-    assert _publish_due_captures(tmp_path, [], best, None, 2.6, crops) == 0
-    assert not (tmp_path / "vehicle_4.jpg").exists()
+    assert _publish_due_captures(tmp_path, [], best, None, 2.6, crops) == 1
+    assert (tmp_path / "vehicle_4.jpg").is_file()
+    assert (tmp_path / "full_4.jpg").is_file()
     assert not (tmp_path / "track_4.jpg").exists()
+    assert list(best) == [4]
+    assert _publish_due_captures(tmp_path, [], best, None, 5.0, crops) == 0
+    assert list(best) == [4]
+    assert 11 in best[4]["source_ids"]
 
 
-def test_publish_skips_capture_without_number_plate(tmp_path) -> None:
+def test_publish_writes_vehicle_capture_without_number_plate(tmp_path) -> None:
+    import json
     import numpy as np
     from app.pipeline.runner import _publish_track_capture
 
@@ -1059,10 +1077,15 @@ def test_publish_skips_capture_without_number_plate(tmp_path) -> None:
         "last_seen": 2.0,
         "vehicle_type": "truck",
     }
-    assert _publish_track_capture(tmp_path, 4, capture, None) is False
-    assert not (tmp_path / "vehicle_4.jpg").exists()
+    assert _publish_track_capture(tmp_path, 4, capture, None) is True
+    assert (tmp_path / "vehicle_4.jpg").is_file()
+    assert (tmp_path / "full_4.jpg").is_file()
     assert not (tmp_path / "track_4.jpg").exists()
-    assert capture.get("published") is not True
+    sidecar = json.loads((tmp_path / "track_4.json").read_text(encoding="utf-8"))
+    assert sidecar["kind"] == "vehicle"
+    assert sidecar["vehicle_only"] is True
+    assert capture["published"] is True
+    assert _publish_track_capture(tmp_path, 4, capture, None) is False
 
 
 def test_overlay_index_allows_vehicle_without_plate() -> None:

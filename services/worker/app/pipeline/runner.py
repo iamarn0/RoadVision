@@ -270,9 +270,10 @@ def _sync_captures_index(
             vehicle_confidence=capture.get("vehicle_confidence"),
             plate_width=capture.get("plate_width"),
             good_evidence=capture.get("good_evidence"),
+            vehicle_only=not _capture_has_plate(capture),
         )
         for track_id, capture in best_by_track.items()
-        if capture.get("published") and _capture_has_plate(capture)
+        if capture.get("published")
     ]
     replace_plate_items(captures_dir, items, overlay_clock)
 
@@ -349,7 +350,8 @@ def _publish_track_capture(
     full = capture.get("image_full")
     has_plate = _capture_has_plate(capture)
     has_vehicle = vehicle_img is not None and getattr(vehicle_img, "size", 0) > 0
-    if not has_plate:
+    has_full = full is not None and getattr(full, "size", 0) > 0
+    if not has_plate and not has_vehicle and not has_full:
         return False
     wrote = False
     try:
@@ -360,8 +362,8 @@ def _publish_track_capture(
             save_png(captures_dir / f"track_{capture_id}.png", evidence)
         if has_vehicle:
             wrote = save_jpeg(captures_dir / f"vehicle_{capture_id}.jpg", vehicle_img, JPEG_EVIDENCE_QUALITY) or wrote
-        if full is not None and getattr(full, "size", 0) > 0:
-            save_jpeg(captures_dir / f"full_{capture_id}.jpg", full, JPEG_EVIDENCE_QUALITY)
+        if has_full:
+            wrote = save_jpeg(captures_dir / f"full_{capture_id}.jpg", full, JPEG_EVIDENCE_QUALITY) or wrote
     except Exception:
         logger.exception("evidence save failed track=%s", capture_id)
         capture["save_error"] = True
@@ -386,6 +388,7 @@ def _publish_track_capture(
         vehicle_confidence=capture.get("vehicle_confidence"),
         plate_width=capture.get("plate_width"),
         good_evidence=capture.get("good_evidence"),
+        vehicle_only=not has_plate,
     )
     (captures_dir / f"track_{capture_id}.json").write_text(json.dumps(sidecar), encoding="utf-8")
     capture["published"] = True
@@ -470,14 +473,94 @@ def _collapse_captures(
             candidate_store.merge(keep_id, drop_id)
 
 
+def _vehicle_only_capture(track_id: int, crop: dict[str, Any], meta: dict[str, Any] | None = None) -> dict[str, Any]:
+    info = meta or {}
+    last = float(crop.get("last_seen") if crop.get("last_seen") is not None else info.get("last_seen") or 0.0)
+    first = float(
+        crop.get("first_seen")
+        if crop.get("first_seen") is not None
+        else info.get("first_seen") or last
+    )
+    frame = crop.get("frame")
+    if frame is None:
+        frame = info.get("last_frame")
+    return {
+        "image_vehicle": crop.get("image"),
+        "image_full": crop.get("image_full"),
+        "image_plate": None,
+        "first_seen": first,
+        "last_seen": float(info.get("last_seen") if info.get("last_seen") is not None else last),
+        "vehicle_type": crop.get("vehicle_type") or info.get("type"),
+        "vehicle_confidence": crop.get("conf") if crop.get("conf") is not None else info.get("conf"),
+        "published": False,
+        "vehicle_only": True,
+        "source_ids": {track_id},
+        "active_tid": track_id,
+        "best_frame": frame,
+        "vehicle_frame": frame,
+        "vehicle_box": crop.get("vehicle_box"),
+        "vehicle_area": crop.get("area"),
+        "closing": False,
+    }
+
+
+def _already_captured(
+    best_by_track: dict[int, dict[str, Any]],
+    track_id: int,
+    crop: dict[str, Any],
+    timestamp: float,
+) -> bool:
+    """True when this track is the same pass as a row already on the capture list."""
+    if _capture_for_vehicle(best_by_track, track_id)[1] is not None:
+        return True
+    merged = find_same_passage(
+        best_by_track,
+        timestamp,
+        crop.get("vehicle_box") or {},
+        None,
+        exclude_track_id=track_id,
+    )
+    if merged is None:
+        return False
+    capture = best_by_track[merged]
+    ids = set(capture.get("source_ids") or [])
+    ids.add(track_id)
+    capture["source_ids"] = ids
+    if not _capture_has_plate(capture):
+        area = float(crop.get("area") or 0.0)
+        image = crop.get("image")
+        if image is not None and getattr(image, "size", 0) > 0 and area > float(capture.get("vehicle_area") or 0.0):
+            capture["image_vehicle"] = image
+            capture["vehicle_area"] = area
+            capture["vehicle_box"] = crop.get("vehicle_box")
+            capture["vehicle_frame"] = crop.get("frame")
+            capture["best_frame"] = crop.get("frame")
+            full = crop.get("image_full")
+            if full is not None and getattr(full, "size", 0) > 0:
+                capture["image_full"] = full
+    return True
+
+
 def _promote_unplated_departures(
     best_by_track: dict[int, dict[str, Any]],
     open_crops: dict[int, dict[str, Any]],
     active: set[int],
     now_ts: float,
 ) -> None:
-    """Vehicles without a number plate are not added to the capture list."""
-    return
+    """A vehicle that leaves without a plate still gets one capture row."""
+    for track_id, crop in list(open_crops.items()):
+        if track_id in active:
+            continue
+        image = crop.get("image")
+        if image is None or getattr(image, "size", 0) == 0:
+            continue
+        last = float(crop.get("last_seen") or 0.0)
+        hold = APPROACH_HOLD_SECONDS if crop.get("closing") else PUBLISH_UNSEEN_SECONDS
+        if now_ts - last < hold:
+            continue
+        if _already_captured(best_by_track, track_id, crop, last):
+            continue
+        best_by_track[track_id] = _vehicle_only_capture(track_id, crop)
 
 
 def _publish_due_captures(
@@ -491,6 +574,7 @@ def _publish_due_captures(
     active = {v.track_id for v in vehicles}
     if open_crops is not None:
         _promote_unplated_departures(best_by_track, open_crops, active, now_ts)
+        _collapse_captures(best_by_track)
     for vehicle in vehicles:
         _cid, capture = _capture_for_vehicle(best_by_track, vehicle.track_id)
         if capture is None:
@@ -539,8 +623,22 @@ def _queue_vehicles_still_in_frame(
     final_index: int,
     source_fps: float,
 ) -> None:
-    """End-of-clip vehicles without a plate stay off the capture list."""
-    return
+    """Add one row for a vehicle still in frame when the clip ends, even with no plate."""
+    if final_index < 0:
+        return
+    fps = max(float(source_fps or 0.0), 1.0)
+    for track_id, crop in open_crops.items():
+        image = crop.get("image")
+        if image is None or getattr(image, "size", 0) == 0:
+            continue
+        meta = vehicle_meta.get(track_id) or {}
+        last_frame = int(meta.get("last_frame") if meta.get("last_frame") is not None else crop.get("frame") or 0)
+        if (final_index - last_frame) / fps > END_STILL_VISIBLE_SECONDS:
+            continue
+        seen = float(meta.get("last_seen") if meta.get("last_seen") is not None else crop.get("last_seen") or 0.0)
+        if _already_captured(best_by_track, track_id, crop, seen):
+            continue
+        best_by_track[track_id] = _vehicle_only_capture(track_id, crop, meta)
 
 
 def _handle_manual_capture(job_id: str, captures_dir: Path, last_associated: list[dict[str, Any]]) -> None:
