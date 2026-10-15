@@ -690,7 +690,7 @@ export default function JobDetailPage() {
                     <img
                       src={captureSrc(previewCap, "plate")}
                       alt="Plate crop"
-                      className="mx-auto max-h-[32vh] w-full max-w-full bg-black object-contain"
+                      className="mx-auto max-h-[64vh] w-auto max-w-full bg-black object-contain"
                     />
                   </div>
                 )}

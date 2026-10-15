@@ -431,3 +431,21 @@ def test_night_save_keeps_native_size_and_rejects_glare_lift() -> None:
     blur_display, blur_original = choose_readable_plate(blurry, dark=True)
     assert blur_display.shape == blurry.shape
     assert np.array_equal(blur_original, blurry)
+    assert np.array_equal(blur_display, blurry)
+
+
+def test_present_plate_enlarges_native_crop_without_washing_strokes() -> None:
+    from app.preprocessing.plates import choose_readable_plate, present_plate_crop
+
+    plate = np.full((40, 120, 3), 180, dtype=np.uint8)
+    for x in range(12, 108, 14):
+        plate[8:32, x : x + 4] = 30
+    display, original = choose_readable_plate(plate, dark=True)
+    assert np.array_equal(display, plate)
+    assert np.array_equal(original, plate)
+    shown = present_plate_crop(plate)
+    assert shown.shape[1] >= 480
+    assert shown.shape[0] > plate.shape[0]
+    assert float(np.percentile(shown, 10)) < 80
+    wide = np.full((80, 500, 3), 100, dtype=np.uint8)
+    assert present_plate_crop(wide).shape == wide.shape

@@ -121,6 +121,101 @@ def test_plausible_plate_rejects_tiny_night_crop() -> None:
     assert ok is False
 
 
+def test_closer_vehicle_frame_supplies_the_plate() -> None:
+    import numpy as np
+    from app.pipeline.runner import _apply_closest_vehicles
+
+    old_plate = np.full((20, 40, 3), 10, np.uint8)
+    new_plate = np.full((30, 90, 3), 200, np.uint8)
+    vehicle = np.full((80, 140, 3), 40, np.uint8)
+    capture = {
+        "image_plate": old_plate,
+        "image_plate_original": old_plate,
+        "image_vehicle": np.full((40, 50, 3), 1, np.uint8),
+        "vehicle_area": 1000.0,
+        "plate_width": 40.0,
+        "best_frame": 1,
+        "enhanced": True,
+    }
+    _apply_closest_vehicles(
+        {7: capture},
+        {
+            7: {
+                "image": vehicle,
+                "area": 2000.0,
+                "frame": 12,
+                "vehicle_box": {"x1": 1, "y1": 1, "x2": 20, "y2": 20},
+                "image_full": vehicle,
+                "image_plate": new_plate,
+                "plate_width": 90.0,
+                "plate_height": 30.0,
+                "plate_box": {"x1": 2, "y1": 2, "x2": 12, "y2": 6},
+                "plate_confidence": 0.77,
+                "plate_quality": 0.4,
+            }
+        },
+    )
+    assert capture["image_vehicle"] is vehicle
+    assert capture["image_plate"] is new_plate
+    assert capture["image_plate_original"] is new_plate
+    assert capture["best_frame"] == 12
+    assert capture["enhanced"] is False
+    assert capture["plate_width"] == 90.0
+    capture["image_plate"] = old_plate
+    capture["best_frame"] = 1
+    _apply_closest_vehicles(
+        {7: capture},
+        {
+            7: {
+                "image": vehicle,
+                "area": 2000.0,
+                "frame": 12,
+                "vehicle_box": {"x1": 1, "y1": 1, "x2": 20, "y2": 20},
+                "image_full": vehicle,
+                "image_plate": new_plate,
+                "plate_width": 90.0,
+                "plate_height": 30.0,
+                "plate_box": {"x1": 2, "y1": 2, "x2": 12, "y2": 6},
+                "plate_confidence": 0.77,
+                "plate_quality": 0.4,
+            }
+        },
+    )
+    assert capture["image_plate"] is new_plate
+    assert capture["best_frame"] == 12
+
+
+def test_closer_frame_keeps_a_wider_plate_when_new_box_is_tiny() -> None:
+    import numpy as np
+    from app.pipeline.runner import _apply_closest_vehicles
+
+    old_plate = np.full((40, 140, 3), 90, np.uint8)
+    tiny = np.full((12, 20, 3), 20, np.uint8)
+    vehicle = np.full((80, 140, 3), 40, np.uint8)
+    capture = {
+        "image_plate": old_plate,
+        "plate_width": 140.0,
+        "vehicle_area": 1000.0,
+        "best_frame": 3,
+    }
+    _apply_closest_vehicles(
+        {4: capture},
+        {
+            4: {
+                "image": vehicle,
+                "area": 3000.0,
+                "frame": 9,
+                "vehicle_box": {"x1": 0, "y1": 0, "x2": 8, "y2": 8},
+                "image_plate": tiny,
+                "plate_width": 20.0,
+            }
+        },
+    )
+    assert capture["image_vehicle"] is vehicle
+    assert capture["image_plate"] is old_plate
+    assert capture["best_frame"] == 3
+
+
 def test_publish_writes_enhanced_jpeg_and_original_png(tmp_path) -> None:
     import numpy as np
     from app.pipeline.runner import _publish_track_capture

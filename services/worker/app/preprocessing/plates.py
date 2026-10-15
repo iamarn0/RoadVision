@@ -150,38 +150,51 @@ def enhance_plate_for_readability(image: np.ndarray, dark: bool = False) -> np.n
     return enhance_night_plate_crop(work)
 
 
+# The plate panel is shown much larger than the plate inside the vehicle photo.
+# A tiny JPEG scaled up by the browser looks softer than that same plate in the
+# vehicle image. 480px is wide enough for the capture view to scale it down.
+PLATE_PRESENT_MIN_WIDTH = 480
+PLATE_PRESENT_MAX_SCALE = 4.0
+
+
 def choose_readable_plate(original: np.ndarray, dark: bool = False) -> tuple[np.ndarray, np.ndarray]:
-    """Return (display crop, original crop).
+    """Return the native crop for both the plate file and the evidence copy.
 
-    Best-frame ranking stays on the original crop. The display JPEG is replaced
-    only when the night recipe raises both core sharpness and core contrast
-    without growing the clipped highlight area.
+    The vehicle photo is the unfiltered frame. Denoise, CLAHE, and unsharp
+    masks thicken the strokes and add bloom, so the plate file looks worse
+    than the plate sitting on that vehicle. Ranking stays on these pixels.
     """
-    from app.preprocessing.quality import saturation_ratio
-
+    _ = dark
     if original is None or getattr(original, "size", 0) == 0:
         return original, original
     native = original.copy() if hasattr(original, "copy") else original
-    if not dark:
-        return native, native
-    enhanced = enhance_night_plate_crop(native)
-    if enhanced.shape != native.shape or np.array_equal(enhanced, native):
-        return native, native
-    if float(saturation_ratio(enhanced)) > float(saturation_ratio(native)) + 0.02:
-        return native, native
-    native_core = _plate_core(native)
-    enhanced_core = _plate_core(enhanced)
-    native_sharp, native_contrast, _, _, _ = plate_structure_metrics(native_core)
-    enhanced_sharp, enhanced_contrast, _, _, _ = plate_structure_metrics(enhanced_core)
-    if enhanced_sharp <= native_sharp or enhanced_contrast < native_contrast * 1.05:
-        return native, native
-    native_gray = _gray(native_core)
-    enhanced_gray = _gray(enhanced_core)
-    native_hot = float((native_gray >= 230).mean())
-    enhanced_hot = float((enhanced_gray >= 230).mean())
-    if enhanced_hot > native_hot + 0.02:
-        return native, native
-    return enhanced, native
+    return native, native
+
+
+def present_plate_crop(image: np.ndarray) -> np.ndarray:
+    """Enlarge a small native plate so the capture view is not a browser upsample.
+
+    Lanczos keeps the edges that are already visible on the vehicle crop.
+    There is no denoise and no contrast stretch.
+    """
+    import cv2
+
+    if image is None or getattr(image, "size", 0) == 0:
+        return image
+    height, width = image.shape[:2]
+    if width < 8 or height < 4 or width >= PLATE_PRESENT_MIN_WIDTH:
+        return image
+    scale = min(PLATE_PRESENT_MAX_SCALE, PLATE_PRESENT_MIN_WIDTH / float(width))
+    if scale <= 1.05:
+        return image
+    enlarged = cv2.resize(
+        image,
+        (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+        interpolation=cv2.INTER_LANCZOS4,
+    )
+    blur = cv2.GaussianBlur(enlarged, (0, 0), 0.6)
+    sharpened = cv2.addWeighted(enlarged, 1.15, blur, -0.15, 0)
+    return np.clip(sharpened, 0, 255).astype(np.uint8)
 
 
 def _gray(image: np.ndarray) -> np.ndarray:

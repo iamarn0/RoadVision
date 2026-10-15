@@ -4,7 +4,12 @@ from uuid import uuid4
 import numpy as np
 
 from app.aggregation.temporal import UniqueDetection
-from app.preprocessing.plates import JPEG_EVIDENCE_QUALITY, JPEG_PLATE_QUALITY, save_jpeg as write_jpeg
+from app.preprocessing.plates import (
+    JPEG_EVIDENCE_QUALITY,
+    JPEG_PLATE_QUALITY,
+    present_plate_crop,
+    save_jpeg as write_jpeg,
+)
 
 
 def save_jpeg(path: Path, image: np.ndarray, quality: int = JPEG_EVIDENCE_QUALITY) -> None:
@@ -27,6 +32,7 @@ def write_evidence(root: Path, job_id: str, detection: UniqueDetection) -> dict[
             continue
         filename = f"{name}_{uuid4().hex}.jpg"
         quality = JPEG_PLATE_QUALITY if name == "plate_crop" else JPEG_EVIDENCE_QUALITY
-        save_jpeg(folder / filename, image, quality)
+        to_write = present_plate_crop(image) if name == "plate_crop" else image
+        save_jpeg(folder / filename, to_write, quality)
         keys[name] = f"evidence/{job_id}/track_{detection.track_id}/{filename}"
     return keys

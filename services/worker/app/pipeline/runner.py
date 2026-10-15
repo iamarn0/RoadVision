@@ -37,6 +37,7 @@ from app.preprocessing.plates import (
     PLATE_CROP_PAD_NIGHT,
     ROI_ENHANCE_LUMINANCE_MAX,
     choose_readable_plate,
+    present_plate_crop,
     consider_plate_candidate,
     crop_box,
     crop_box_asymmetric,
@@ -177,7 +178,7 @@ def _write_manual_captures(captures_dir: Path, last_associated: list[dict[str, A
         track_id = item.get("track_id")
         if track_id is None or plate_img is None or getattr(plate_img, "size", 0) == 0:
             continue
-        save_jpeg(captures_dir / f"track_{track_id}.jpg", plate_img, JPEG_PLATE_QUALITY)
+        save_jpeg(captures_dir / f"track_{track_id}.jpg", present_plate_crop(plate_img), JPEG_PLATE_QUALITY)
         if vehicle_img is not None and getattr(vehicle_img, "size", 0) > 0:
             save_jpeg(captures_dir / f"vehicle_{track_id}.jpg", vehicle_img, JPEG_EVIDENCE_QUALITY)
         written += 1
@@ -356,7 +357,7 @@ def _publish_track_capture(
     wrote = False
     try:
         if has_plate:
-            wrote = save_jpeg(captures_dir / f"track_{capture_id}.jpg", plate, JPEG_PLATE_QUALITY) or wrote
+            wrote = save_jpeg(captures_dir / f"track_{capture_id}.jpg", present_plate_crop(plate), JPEG_PLATE_QUALITY) or wrote
             original = capture.get("image_plate_original")
             evidence = original if original is not None and getattr(original, "size", 0) > 0 else plate
             save_png(captures_dir / f"track_{capture_id}.png", evidence)
@@ -376,7 +377,7 @@ def _publish_track_capture(
         alt_plate = alt.get("image_plate")
         if alt_plate is None or getattr(alt_plate, "size", 0) == 0:
             continue
-        save_jpeg(captures_dir / f"track_{capture_id}_alt{i}.jpg", alt_plate, JPEG_PLATE_QUALITY)
+        save_jpeg(captures_dir / f"track_{capture_id}_alt{i}.jpg", present_plate_crop(alt_plate), JPEG_PLATE_QUALITY)
         save_png(captures_dir / f"track_{capture_id}_alt{i}.png", alt_plate)
     sidecar = plate_index_item(
         capture_id,
@@ -440,6 +441,37 @@ def _apply_store_winners(
             capture["vehicle_area"] = float(winner["vehicle_area"])
 
 
+def _use_plate_from_vehicle_frame(capture: dict[str, Any], crop: dict[str, Any]) -> None:
+    """Keep the plate file on the same frame as the vehicle photo."""
+    plate = crop.get("image_plate")
+    if plate is None or getattr(plate, "size", 0) == 0:
+        return
+    new_w = float(crop.get("plate_width") or 0.0)
+    old_w = float(capture.get("plate_width") or 0.0)
+    if old_w > 0.0 and new_w < old_w * 0.85:
+        return
+    capture["image_plate"] = plate
+    capture["image_plate_original"] = plate
+    capture["enhanced"] = False
+    if crop.get("frame") is not None:
+        capture["best_frame"] = crop.get("frame")
+    if crop.get("plate_box") is not None:
+        capture["plate_box"] = crop.get("plate_box")
+    if new_w > 0.0:
+        capture["plate_width"] = new_w
+    if crop.get("plate_height") is not None:
+        capture["plate_height"] = crop.get("plate_height")
+    if crop.get("plate_confidence") is not None:
+        capture["plate_confidence"] = crop.get("plate_confidence")
+    if crop.get("plate_quality") is not None:
+        capture["quality"] = float(crop["plate_quality"])
+        capture["score"] = capture["quality"]
+    if crop.get("sharp") is not None:
+        capture["sharp"] = crop.get("sharp")
+    if crop.get("contrast") is not None:
+        capture["contrast"] = crop.get("contrast")
+
+
 def _apply_closest_vehicles(
     best_by_track: dict[int, dict[str, Any]],
     open_crops: dict[int, dict[str, Any]],
@@ -450,18 +482,24 @@ def _apply_closest_vehicles(
         if capture is None:
             continue
         area = float(crop.get("area") or 0.0)
-        if area <= float(capture.get("vehicle_area") or 0.0) * CLOSER_VEHICLE_RATIO:
+        closer = area > float(capture.get("vehicle_area") or 0.0) * CLOSER_VEHICLE_RATIO
+        already = capture.get("vehicle_frame") == crop.get("frame")
+        if not closer and not already:
             continue
         image = crop.get("image")
         if image is None or getattr(image, "size", 0) == 0:
             continue
-        capture["image_vehicle"] = image
-        capture["vehicle_box"] = crop.get("vehicle_box")
-        capture["vehicle_area"] = area
-        capture["vehicle_frame"] = crop.get("frame")
-        full = crop.get("image_full")
-        if full is not None and getattr(full, "size", 0) > 0:
-            capture["image_full"] = full
+        if closer:
+            capture["image_vehicle"] = image
+            capture["vehicle_box"] = crop.get("vehicle_box")
+            capture["vehicle_area"] = area
+            capture["vehicle_frame"] = crop.get("frame")
+            full = crop.get("image_full")
+            if full is not None and getattr(full, "size", 0) > 0:
+                capture["image_full"] = full
+        # The vehicle photo is this frame. Keep its plate, including on later
+        # frames where a farther crop would otherwise be written back.
+        _use_plate_from_vehicle_frame(capture, crop)
 
 
 def _collapse_captures(
@@ -1281,6 +1319,21 @@ def process_job(db: Session, job_id: UUID) -> None:
                         continue
                     saved_plate, original_plate = choose_readable_plate(plate_img, dark=dark)
                     enhanced = saved_plate is not original_plate
+                    closest = open_crops.get(vehicle.track_id)
+                    if (
+                        closest is not None
+                        and closest.get("frame") == frame.index
+                        and original_plate is not None
+                        and getattr(original_plate, "size", 0) > 0
+                    ):
+                        closest["image_plate"] = original_plate.copy()
+                        closest["plate_box"] = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+                        closest["plate_width"] = float(metrics.plate_width)
+                        closest["plate_height"] = float(metrics.plate_height)
+                        closest["plate_confidence"] = plate.confidence
+                        closest["plate_quality"] = float(metrics.total_score)
+                        closest["sharp"] = metrics.sharpness_score
+                        closest["contrast"] = metrics.contrast_score
                     if reason and not metrics.accepted:
                         _record_reject(
                             reject_counts,
@@ -1647,7 +1700,8 @@ def _persist(
             filename = f"{kind}_{uuid4().hex}.jpg"
             path = folder / filename
             quality = JPEG_PLATE_QUALITY if kind == "plate_crop" else JPEG_EVIDENCE_QUALITY
-            if not save_jpeg(path, image, quality):
+            to_write = present_plate_crop(image) if kind == "plate_crop" else image
+            if not save_jpeg(path, to_write, quality):
                 logger.warning("evidence jpeg failed kind=%s track=%s", kind, track_id)
                 continue
             if kind == "plate_crop":
